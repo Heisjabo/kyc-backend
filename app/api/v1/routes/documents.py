@@ -1,7 +1,8 @@
 from datetime import date
 
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
+from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile, status
 
+from app.api.v1.routes.verifications import open_session
 from app.pipeline.document import scan_document
 from app.rules import document as rules
 from app.schemas.document import Applicant, DocumentCheckResponse, DocumentType
@@ -27,6 +28,7 @@ def _read_upload(upload: UploadFile, field: str) -> bytes:
 # CPU-heavy OCR doesn't block other requests.
 @router.post("/scan", response_model=DocumentCheckResponse)
 def scan(
+    request: Request,
     document_type: DocumentType = Form(...),
     front: UploadFile = File(..., description="Photo page (passport) or front side (ID card)"),
     back: UploadFile | None = File(None, description="Back side, where ID cards carry the MRZ"),
@@ -35,9 +37,10 @@ def scan(
     date_of_birth: date | None = Form(None, description="YYYY-MM-DD"),
     issuing_country: str | None = Form(None, description="Country code or name: RW, RWA or Rwanda"),
 ) -> DocumentCheckResponse:
-    return scan_document(
+    front_bytes = _read_upload(front, "front")
+    result = scan_document(
         document_type=document_type,
-        front=_read_upload(front, "front"),
+        front=front_bytes,
         back=_read_upload(back, "back") if back else None,
         applicant=Applicant(
             first_name=first_name,
@@ -46,3 +49,13 @@ def scan(
             issuing_country=issuing_country,
         ),
     )
+
+    # Hold on to the document so the face step can compare against its portrait.
+    session, portrait = open_session(document_type.value, result.decision.value, result.extracted, front_bytes)
+    result.portrait = portrait
+    if portrait != "missing":
+        result.verification_id = session.id
+        result.face_verification_url = str(request.base_url).rstrip("/") + f"/verify/{session.id}"
+    if portrait == "small":
+        result.warnings.append("DOCUMENT_PHOTO_SMALL")
+    return result

@@ -57,6 +57,12 @@ class ExtractedFields(BaseModel):
 
 
 class DocumentCheckResponse(BaseModel):
+    # Opened when the document carries a usable portrait, so the face step can
+    # reuse it. Held in memory only, for SESSION_TTL_MINUTES.
+    verification_id: str | None = None
+    face_verification_url: str | None = None
+    # "ok", "small" or "missing": the state of the photo printed on the document.
+    portrait: str | None = None
     decision: Decision
     reasons: list[str]
     warnings: list[str]

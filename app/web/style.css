@@ -1,0 +1,117 @@
+:root {
+  --bg: #10131a;
+  --panel: #171b24;
+  --line: #262c38;
+  --text: #e7eaf0;
+  --muted: #9aa3b2;
+  --accent: #5b8cff;
+  --pass: #3fb27f;
+  --review: #d9a441;
+  --fail: #d9534f;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  padding: 24px 16px 64px;
+  background: var(--bg);
+  color: var(--text);
+  font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+
+main { max-width: 820px; margin: 0 auto; }
+h1 { font-size: 22px; margin: 0 0 4px; }
+h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin: 0 0 8px; }
+.lead { color: var(--muted); margin: 0 0 24px; }
+.muted { color: var(--muted); }
+
+form, aside, .controls { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 16px; }
+form { display: grid; gap: 14px; }
+.row { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+label { display: grid; gap: 6px; font-size: 13px; color: var(--muted); }
+
+input, select, button, .button {
+  font: inherit;
+  color: var(--text);
+  background: #1e2431;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+input[type="file"] { padding: 8px; }
+
+button, .button {
+  background: var(--accent);
+  border-color: transparent;
+  color: #0b1020;
+  font-weight: 600;
+  cursor: pointer;
+  text-align: center;
+  text-decoration: none;
+  display: inline-block;
+}
+button:disabled { opacity: .5; cursor: default; }
+
+.capture, .stage { display: grid; grid-template-columns: 1fr 260px; gap: 16px; align-items: start; margin: 20px 0; }
+.camera { position: relative; width: 100%; max-width: 380px; margin: 0 auto; aspect-ratio: 1; background: #000; border-radius: 50%; overflow: hidden; border: 1px solid var(--line); }
+.camera video, .camera canvas { width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); display: block; }
+
+/* Shown over the frozen shot while the answer comes back. */
+.spinner { position: absolute; inset: 0; display: grid; place-items: center; background: rgba(8,10,16,.55); }
+.spinner[hidden] { display: none; }  /* our display rule would otherwise beat the hidden attribute */
+.spinner::after {
+  content: ""; width: 46px; height: 46px; border-radius: 50%;
+  border: 3px solid rgba(255,255,255,.25); border-top-color: var(--accent);
+  animation: spin .8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* The two portraits side by side once the result is in. */
+.photos { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.photos figure { margin: 0; display: grid; justify-items: center; }
+.photos img { width: 100%; max-width: 260px; aspect-ratio: 1; object-fit: cover; border-radius: 12px; border: 1px solid var(--line); background: #000; }
+.photos figcaption { margin-top: 6px; font-size: 12px; color: var(--muted); text-align: center; }
+
+.ring { position: absolute; inset: 0; width: 100%; height: 100%; transform: rotate(-90deg); }
+.ring-track { fill: none; stroke: rgba(255,255,255,.15); stroke-width: 3; }
+.ring-progress { fill: none; stroke: var(--accent); stroke-width: 3; stroke-linecap: round; transition: stroke-dashoffset .25s linear; }
+
+/* Live feedback: the ring turns green while the camera sees a usable face. */
+.camera.ok { border-color: var(--pass); box-shadow: 0 0 0 2px rgba(63,178,127,.25); }
+
+.hint { min-height: 22px; margin: 10px auto 0; max-width: 380px; text-align: center; font-size: 14px; color: var(--muted); }
+.hint.warn { color: var(--review); }
+.readings { max-width: 380px; margin: 4px auto 0; text-align: center; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+
+.prompt {
+  position: absolute; left: 0; right: 0; bottom: 12%;
+  text-align: center; font-weight: 600;
+  text-shadow: 0 1px 6px rgba(0,0,0,.8);
+}
+
+aside img, #captured { width: 100%; border-radius: 10px; border: 1px solid var(--line); display: block; }
+
+dl { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; margin: 12px 0 0; font-size: 13px; }
+dt { color: var(--muted); }
+dd { margin: 0; word-break: break-word; }
+
+.controls { display: flex; gap: 14px; align-items: end; max-width: 380px; margin: 14px auto 0; }
+.controls label { flex: 1; }
+
+.status { color: var(--muted); min-height: 22px; margin: 12px 0; }
+
+.verdict { display: grid; gap: 4px; padding: 14px 16px; border-radius: 12px; border: 1px solid var(--line); background: var(--panel); margin-bottom: 16px; }
+.verdict strong { font-size: 18px; }
+.verdict.pass strong { color: var(--pass); }
+.verdict.review strong, .verdict.retake strong { color: var(--review); }
+.verdict.fail strong { color: var(--fail); }
+
+details { margin-top: 12px; }
+summary { cursor: pointer; color: var(--muted); font-size: 13px; }
+pre { background: #0c0f16; border: 1px solid var(--line); border-radius: 10px; padding: 12px; overflow: auto; max-height: 340px; font-size: 12px; }
+
+@media (max-width: 680px) {
+  .capture, .stage, .row { grid-template-columns: 1fr; }
+  .controls { flex-direction: column; align-items: stretch; }
+}
