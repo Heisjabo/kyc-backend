@@ -1,7 +1,7 @@
 """Face match and the document-then-face flow.
 
 The models are stubbed: embeddings are plain vectors and the detector returns
-faces built by hand, so these test the decision logic, not DeepFace itself.
+faces built by hand, so these test the decision logic, not ArcFace itself.
 """
 
 import numpy as np
@@ -34,27 +34,25 @@ def rules_ttl_seconds() -> int:
     return settings.SESSION_TTL_MINUTES * 60
 
 
-# The pass line is DeepFace's tuned threshold for the configured model, so the
-# tests work relative to it rather than hardcoding a number of their own.
-LINE = pass_threshold()                                  # DeepFace's tuned threshold
-PASSES = LINE + face_rules.MATCH_PASS_MARGIN             # what we require to pass
-FAILS = LINE - 0.15   # comfortably below the line
+# The tests work relative to the configured line rather than hardcoding a number,
+# so moving the line after calibration does not rewrite them.
+LINE = pass_threshold()
+PASSES = LINE        # at the line is a pass
+FAILS = LINE - 0.15  # comfortably below it
 
 
 # Face match
 
-def test_pass_line_is_deepfaces_threshold_for_this_model():
-    from deepface.modules.verification import find_threshold
-
-    assert LINE == pytest.approx(1 - find_threshold(settings.FACE_RECOGNITION_MODEL, "cosine"))
-    assert PASSES == pytest.approx(LINE + face_rules.MATCH_PASS_MARGIN)
+def test_pass_line_is_the_configured_threshold():
+    assert LINE == pytest.approx(face_rules.MATCH_THRESHOLD)
 
 
-def test_scores_measured_on_two_real_people_land_where_they_should():
-    """Measured with Facenet512 on two people's Rwandan IDs and a real capture:
-    the owner scores 0.71 to 0.75, a different person 0.55 to 0.58."""
-    owner = match_faces(REFERENCE, [vector(0.75), vector(0.73), vector(0.71)])
-    stranger = match_faces(REFERENCE, [vector(0.58), vector(0.55), vector(0.57)])
+def test_scores_measured_on_real_images_land_where_they_should():
+    """Measured with ArcFace (buffalo_l) on one person's Rwandan ID and driving
+    licence against their own capture and against six strangers: the owner scores
+    0.46 to 0.58, strangers 0.02 to 0.07, against a line of 0.40."""
+    owner = match_faces(REFERENCE, [vector(0.58), vector(0.55), vector(0.52)])
+    stranger = match_faces(REFERENCE, [vector(0.07), vector(0.03), vector(0.02)])
     assert owner.check.status == "pass"
     assert stranger.check.status == "fail"
     assert stranger.check.reasons == ["FACE_MISMATCH"]
@@ -105,10 +103,12 @@ def test_document_without_a_portrait_is_the_documents_problem():
     assert result.check.reasons == ["NO_FACE_ON_DOCUMENT"]
 
 
-def test_no_face_captured_fails():
+def test_no_frontal_frame_fails():
+    """Only frames where the person faced the camera reach the matcher, so an
+    empty list means the capture never held one, not that no face was seen."""
     result = match_faces(REFERENCE, [])
     assert result.check.status == "fail"
-    assert result.check.reasons == ["NO_FACE_CAPTURED"]
+    assert result.check.reasons == ["NO_FRONTAL_FRAME"]
 
 
 # The flow: a scanned document, then the face step against it
@@ -220,17 +220,15 @@ def test_session_endpoint_feeds_the_face_page(session_with_document):
     assert client.get("/api/session/nope").status_code == 404
 
 
-def test_confidence_is_deepfaces_calibrated_percentage():
-    """The percentage is DeepFace's own logistic fit, not a rescaled similarity."""
-    from deepface.modules.verification import find_confidence
-
+def test_no_confidence_percentage_is_reported():
+    """A similarity is not a probability, and we have no calibration set to turn
+    one into the other, so the response carries the score and the line only."""
     result = match_faces(REFERENCE, [vector(PASSES + 0.1), vector(PASSES + 0.1), vector(PASSES + 0.1)])
-    expected = find_confidence(1 - result.score, settings.FACE_RECOGNITION_MODEL, True, "cosine")
-    assert result.confidence == pytest.approx(expected, abs=0.1)
-    assert result.confidence > 50
+    assert not hasattr(result, "confidence")
 
 
-def test_confidence_drops_below_fifty_when_it_says_different_person():
+def test_a_stranger_fails_with_the_score_reported():
     result = match_faces(REFERENCE, [vector(FAILS - 0.2), vector(FAILS - 0.2), vector(FAILS - 0.2)])
     assert result.check.status == "fail"
-    assert result.confidence < 50
+    assert result.check.reasons == ["FACE_MISMATCH"]
+    assert result.score < LINE

@@ -14,12 +14,13 @@ class Settings(BaseSettings):
     # MediaPipe's 478-point face mesh bundle, used for liveness (head pose and
     # planarity). Run through TFLite directly; see README for the download.
     FACE_MESH_MODEL: str = "models/face_landmarker.task"
-    # Any DeepFace model; each carries its own tuned threshold, read at runtime.
-    # Measured on two real people's Rwandan IDs: Facenet512 put the two different
-    # people at 0.548 (below its 0.700 line) while SFace put them at 0.482 (above
-    # its 0.407 line, i.e. it called two strangers the same person). Facenet512 is
-    # slower on CPU, 170 ms a frame against 20 ms, and worth it.
-    FACE_RECOGNITION_MODEL: str = "Facenet512"
+    # Matching runs on two ONNX files from InsightFace's buffalo_l pack: SCRFD
+    # for detection and ArcFace for the embedding. See README for the download.
+    FACE_DETECTION_MODEL: str = "models/det_10g.onnx"
+    FACE_RECOGNITION_MODEL: str = "models/w600k_r50.onnx"
+    # -1 runs on CPU. A GPU index (0, 1, ...) uses CUDA, which needs
+    # onnxruntime-gpu installed in place of onnxruntime.
+    FACE_MODEL_DEVICE_ID: int = -1
 
     # How long a scanned document stays available for the face step (in memory).
     SESSION_TTL_MINUTES: int = 30
