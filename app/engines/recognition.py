@@ -1,124 +1,168 @@
-"""Face recognition with DeepFace: turn a face into an embedding and compare two.
+"""Face recognition: SCRFD finds the face, ArcFace describes it, cosine compares.
 
-Detection stays with YuNet (one detector for the whole service), so DeepFace is
-given a face this module has already cut out and levelled, with its own detection
-skipped.
+This follows a working implementation of the same job (a local SCRFD + ArcFace
+verification service), down to the two model files: det_10g.onnx and
+w600k_r50.onnx from InsightFace's buffalo_l pack, the same SHA-256 as theirs.
 
-The pass threshold is not ours: it comes from DeepFace's own tuned table, which
-holds one value per model and distance metric (deepface/modules/verification.py,
-find_threshold). We ask it for the configured model rather than hardcoding a
-number, because the scales differ wildly between models: a cosine distance of
-0.30 for Facenet512, 0.593 for SFace, 0.68 for ArcFace.
+The path an image takes, identical for the portrait on a document and for a frame
+from the camera:
+
+  1. SCRFD detects faces at 640x640 and returns a box and five landmarks each.
+     Only the largest face is taken (max_num=1, metric="max"): on a document that
+     is the portrait rather than a ghost image, in a capture it is the person at
+     the camera rather than somebody behind them.
+  2. face_align.norm_crop warps those five landmarks onto ArcFace's canonical
+     112x112 template, so both images arrive at the model framed the same way.
+  3. ArcFace returns 512 numbers, which are divided by their own length. Because
+     both vectors are then unit length, the cosine of the angle between them is
+     their dot product, and that is the match score.
+
+Detection for liveness stays with YuNet (engines/face.py): it feeds head pose and
+quality, which are a different job. The matcher runs its own detection so that
+the two images it compares are prepared identically, which is the whole point.
 """
 
-import os
 import threading
-from functools import lru_cache
+from pathlib import Path
 
-import cv2
 import numpy as np
 
-os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "3")  # keep TensorFlow's banner out of the logs
-# DeepFace prints a deprecation banner about backend installation on every import.
-# We pin the backend in requirements.txt (deepface[tensorflow]), so the notice is
-# noise: ERROR and above still come through.
-os.environ.setdefault("DEEPFACE_LOG_LEVEL", "40")
-
 from app.core.config import settings
-from app.engines.face import Face, detect_faces, portrait
 from app.rules import face as rules
 
+EMBEDDING_DIMENSION = 512
+
+_models = None
 _lock = threading.Lock()
-_warmed = False
 
 
-def _deepface():
-    """Imported lazily: loading the backend takes seconds and most requests never need it."""
-    from deepface import DeepFace
-
-    return DeepFace
+class RecognitionUnavailableError(RuntimeError):
+    """The models could not be loaded. Matching cannot run at all."""
 
 
-def align(image: np.ndarray, face: Face) -> np.ndarray:
-    """Prepare the face for the model: the same crop used everywhere else.
+def _session_options(ort):
+    """One inference thread per session: the service is concurrent at the request
+    level, and letting every session spawn threads of its own fights with that."""
+    options = ort.SessionOptions()
+    options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+    options.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
+    options.intra_op_num_threads = 1
+    options.enable_cpu_mem_arena = True
+    options.enable_mem_pattern = True
+    return options
 
-    One crop rule in the whole service, the one the document portrait has always
-    used (a third of the face box added on every side), resized to the model's
-    input size. Nothing else is done to the face.
-    """
-    crop = portrait(image, face)
-    if crop.size == 0:
-        crop = image
-    return cv2.resize(crop, rules.ALIGN_SIZE, interpolation=cv2.INTER_CUBIC)
+
+def _providers(ort) -> list:
+    """CUDA where there is a GPU, CPU otherwise. Nothing leaves the machine."""
+    available = set(ort.get_available_providers())
+    if settings.FACE_MODEL_DEVICE_ID >= 0 and "CUDAExecutionProvider" in available:
+        return [
+            ("CUDAExecutionProvider", {"device_id": settings.FACE_MODEL_DEVICE_ID}),
+            "CPUExecutionProvider",
+        ]
+    return ["CPUExecutionProvider"]
 
 
-def embed(image: np.ndarray, face: Face | None = None) -> np.ndarray | None:
-    """Embedding of the largest face in the image, or None if there is no face."""
-    if face is None:
-        found = detect_faces(image)
-        if not found:
-            return None
-        face = found[0]
+def _load():
+    """The detector and the recogniser, loaded once (about 190 MB of weights)."""
+    global _models
+    if _models is not None:
+        return _models
 
-    prepared = align(image, face)
+    import onnxruntime as ort
+    from insightface.model_zoo.arcface_onnx import ArcFaceONNX
+    from insightface.model_zoo.scrfd import SCRFD
+
+    detection = Path(settings.FACE_DETECTION_MODEL)
+    recognition = Path(settings.FACE_RECOGNITION_MODEL)
+    for model in (detection, recognition):
+        if not model.is_file():
+            raise RecognitionUnavailableError(f"Face model not found at {model}. See README.")
+
+    options, providers = _session_options(ort), _providers(ort)
+    on_gpu = any("CUDAExecutionProvider" in str(provider) for provider in providers)
+    ctx = settings.FACE_MODEL_DEVICE_ID if on_gpu else -1
+
+    detector = SCRFD(
+        model_file=str(detection),
+        session=ort.InferenceSession(str(detection), sess_options=options, providers=providers),
+    )
+    recogniser = ArcFaceONNX(
+        model_file=str(recognition),
+        session=ort.InferenceSession(str(recognition), sess_options=options, providers=providers),
+    )
+    detector.prepare(ctx_id=ctx, input_size=rules.DETECT_SIZE, det_thresh=rules.DETECT_THRESHOLD)
+    recogniser.prepare(ctx_id=ctx)
+
+    if not detector.use_kps:
+        # Without the five landmarks there is no alignment, and without alignment
+        # the model is comparing framings as much as faces.
+        raise RecognitionUnavailableError("The detection model does not return facial landmarks")
+
+    _models = (detector, recogniser)
+    return _models
+
+
+def embed(image: np.ndarray) -> np.ndarray | None:
+    """The 512-number vector for the largest face in the image, or None."""
     with _lock:
-        results = _deepface().represent(
-            img_path=prepared,
-            model_name=settings.FACE_RECOGNITION_MODEL,
-            detector_backend="skip",  # YuNet already found and levelled the face
-            enforce_detection=False,
-            normalization="base",
+        detector, recogniser = _load()
+        boxes, landmarks = detector.detect(image, max_num=1, metric="max")
+        if boxes.shape[0] == 0 or landmarks is None or landmarks.shape[0] == 0:
+            return None
+
+        from insightface.utils import face_align
+
+        aligned = face_align.norm_crop(
+            image, landmark=landmarks[0], image_size=recogniser.input_size[0]
         )
-    if not results:
+        vector = np.asarray(recogniser.get_feat(aligned), dtype=np.float32).reshape(-1)
+
+    if vector.size != EMBEDDING_DIMENSION or not np.isfinite(vector).all():
         return None
-    return np.asarray(results[0]["embedding"], dtype=np.float32)
-
-
-@lru_cache(maxsize=8)
-def pass_threshold(model: str | None = None) -> float:
-    """DeepFace's tuned same-person line for this model, as a similarity.
-
-    DeepFace states it as a cosine *distance*; similarity is 1 minus that.
-    """
-    from deepface.modules.verification import find_threshold
-
-    return 1.0 - find_threshold(model or settings.FACE_RECOGNITION_MODEL, "cosine")
-
-
-def confidence(score: float, model: str | None = None) -> float:
-    """DeepFace's calibrated confidence for a score, as a percentage.
-
-    DeepFace fits a logistic regression per model that turns a distance into the
-    probability that the classification is right. Same-person answers land in
-    51-100%, different-person answers in 0-49%, so the number jumps at the
-    threshold: it is confidence in the verdict, not a "how similar" percentage.
-    """
-    from deepface.modules.verification import find_confidence
-
-    name = model or settings.FACE_RECOGNITION_MODEL
-    distance = 1.0 - score
-    return round(find_confidence(distance, name, distance <= (1.0 - pass_threshold(name)), "cosine"), 1)
+    length = float(np.linalg.norm(vector))
+    if length <= np.finfo(np.float32).eps:
+        return None
+    return np.ascontiguousarray(vector / length, dtype=np.float32)
 
 
 def similarity(a: np.ndarray, b: np.ndarray) -> float:
-    """Cosine similarity, -1 to 1. Higher means more alike."""
-    norm = float(np.linalg.norm(a) * np.linalg.norm(b))
-    if norm == 0:
+    """Cosine similarity, -1 to 1. Higher means more alike.
+
+    Each vector is scaled by its largest element before the norm is taken, which
+    keeps the arithmetic away from overflow and underflow, and the result is
+    clipped: floating point can land a few ulps outside the range.
+    """
+    left, right = np.asarray(a, dtype=np.float64), np.asarray(b, dtype=np.float64)
+    if left.shape != right.shape or left.size == 0:
         return 0.0
-    return float(np.dot(a, b) / norm)
+    if not (np.isfinite(left).all() and np.isfinite(right).all()):
+        return 0.0
+    try:
+        return float(np.clip(np.dot(_unit(left), _unit(right)), -1.0, 1.0))
+    except ValueError:
+        return 0.0
+
+
+def _unit(vector: np.ndarray) -> np.ndarray:
+    scale = float(np.max(np.abs(vector)))
+    if scale == 0.0:
+        raise ValueError("a zero vector has no direction")
+    scaled = vector / scale
+    return scaled / float(np.sqrt(np.dot(scaled, scaled)))
+
+
+def pass_threshold() -> float:
+    """The similarity at or above which two faces are treated as one person.
+
+    Kept in rules/face.py with the measurements behind it. InsightFace publishes
+    no threshold for this pack: the right line depends on how the two images were
+    taken, and ours are a photograph printed on a card against a webcam frame.
+    """
+    return rules.MATCH_THRESHOLD
 
 
 def warm_up() -> None:
-    """Load the model once at start-up so the first real request isn't slow."""
-    global _warmed
-    if _warmed:
-        return
-    blank = np.zeros((rules.ALIGN_SIZE[1], rules.ALIGN_SIZE[0], 3), dtype=np.uint8)
+    """Load the models at start-up so the first real request is not slow."""
     with _lock:
-        _deepface().represent(
-            img_path=blank,
-            model_name=settings.FACE_RECOGNITION_MODEL,
-            detector_backend="skip",
-            enforce_detection=False,
-        )
-    _warmed = True
+        _load()

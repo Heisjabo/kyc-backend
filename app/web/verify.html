@@ -401,7 +401,6 @@ function show(body, ok) {
 
   const challenge = body.liveness.challenge;
   document.getElementById('scores').innerHTML = `
-    <dt>confidence</dt><dd>${body.match.confidence ?? '-'}%</dd>
     <dt>match score</dt><dd>${body.match.score ?? '-'} (pass at ${body.match.threshold})</dd>
     <dt>best frame</dt><dd>${body.match.best_score ?? '-'}</dd>
     <dt>frames compared</dt><dd>${body.match.frames_compared}</dd>

@@ -74,10 +74,11 @@ class FrameProbeResponse(BaseModel):
 class FaceMatchResult(BaseModel):
     """How closely the captured face matches the portrait on the document."""
 
+    # Cosine similarity between the two ArcFace vectors, -1 to 1: the mean of the
+    # best MATCH_TOP_FRAMES frontal frames. No confidence percentage is reported,
+    # because a similarity is not a probability and we have no calibration set to
+    # turn one into the other.
     score: float | None
-    # DeepFace's calibrated confidence in the verdict, as a percentage. 51-100 when
-    # it says same person, 0-49 when it says different, so it jumps at the threshold.
-    confidence: float | None
     best_score: float | None
     frames_compared: int
     threshold: float

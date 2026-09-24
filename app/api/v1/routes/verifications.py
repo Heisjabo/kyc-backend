@@ -47,7 +47,7 @@ def open_session(document_type: str, decision: str, fields: ExtractedFields | No
                 or eye_distance < rules.SMALL_DOCUMENT_EYE_DISTANCE
             )
             quality = "small" if small else "ok"
-            face_embedding = embed(image, face)
+            face_embedding = embed(image)
             ok, buffer = cv2.imencode(
                 ".jpg", portrait(image, face), [cv2.IMWRITE_JPEG_QUALITY, 90]
             )
@@ -104,10 +104,17 @@ def verify_face(
         payloads, challenge_type=challenge, resting=session.resting_mesh, claims=claims
     )
 
-    # Compare the document portrait with the frames where the person faced the
-    # camera, sharpest first: a blurred frame scores badly whoever is in it.
-    candidates = [pose.index for pose in liveness.poses if pose.direction == "centre"]
-    candidates = candidates or [pose.index for pose in liveness.poses if pose.faces == 1]
+    # Identity is decided on the frames where the person faced the camera, and on
+    # nothing else. The frames from the head movements prove liveness, not
+    # identity: a turned face scores lower against a passport-style portrait
+    # whoever it belongs to. Frontality is measured in degrees rather than taken
+    # from the liveness step's "centre" label, which tolerates up to 18 degrees
+    # of yaw (see rules/face.py FRONTAL_PITCH_DEGREES).
+    candidates = [
+        pose.index
+        for pose in liveness.poses
+        if abs(pose.yaw) <= rules.FRONTAL_DEGREES and abs(pose.pitch) <= rules.FRONTAL_PITCH_DEGREES
+    ]
 
     scored = []
     for index in candidates:
@@ -120,11 +127,13 @@ def verify_face(
             continue
         crop = crop_face(image, found[0], margin=0.1)
         sharpness = float(cv2.Laplacian(cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY), cv2.CV_64F).var())
-        scored.append((sharpness, index, image, found[0]))
+        scored.append((sharpness, index, image))
 
     embeddings = []
-    for _, _, image, face in sorted(scored, key=lambda item: item[0], reverse=True)[: rules.MATCH_FRAMES]:
-        embedding = embed(image, face)
+    for _, _, image in sorted(scored, key=lambda item: item[0], reverse=True)[: rules.MATCH_FRAMES]:
+        # The matcher runs its own detection and alignment, so the frame goes in
+        # whole: both sides of the comparison are then prepared the same way.
+        embedding = embed(image)
         if embedding is not None:
             embeddings.append(embedding)
 

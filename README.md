@@ -7,11 +7,28 @@ In-house KYC service (FastAPI). Exposes APIs for identity verification.
 - Python 3.11
 - Tesseract OCR: `brew install tesseract` (macOS) or `apt install tesseract-ocr` (Linux)
 - RapidOCR models (~30 MB) download automatically on first run
-- Face detector model (~230 KB), downloaded once:
+- Face detector for liveness (~230 KB) and the two matching models from
+  InsightFace's `buffalo_l` pack (~190 MB together), downloaded once:
 
 ```bash
 mkdir -p models && curl -sL -o models/face_detection_yunet_2023mar.onnx \
   https://github.com/opencv/opencv_zoo/raw/main/models/face_detection_yunet/face_detection_yunet_2023mar.onnx
+
+# SCRFD detection (det_10g.onnx) and ArcFace recognition (w600k_r50.onnx)
+curl -sL -o /tmp/buffalo_l.zip \
+  https://github.com/deepinsight/insightface/releases/download/v0.7/buffalo_l.zip
+unzip -j -o /tmp/buffalo_l.zip 'det_10g.onnx' 'w600k_r50.onnx' -d models/
+
+# MediaPipe face landmarker (~3.8 MB), the 478-point mesh used for liveness
+curl -sL -o models/face_landmarker.task \
+  https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/latest/face_landmarker.task
+```
+
+Expected SHA-256:
+
+```
+5838f7fe053675b1c7a08b633df49e7af5495cee0493c7dcf6697200b85b5b91  det_10g.onnx
+4c06341c33c2ca1f86781dab0e829f88ad5b64be9fba56e56bc9ebdefc619e43  w600k_r50.onnx
 ```
 
 ## Run locally
@@ -127,11 +144,17 @@ The sharpest frontal frame comes back as a cropped JPEG. This stops a printed
 photo, but not a recorded video or a fake camera feed; passive anti-spoofing is
 still to come.
 
-**Face match.** DeepFace embeddings (SFace by default) of the document portrait and
-of the sharpest frontal captured frames, compared by cosine similarity. The score is
-the mean of the best few frames, so a handful of grainy ones cannot sink a genuine
-capture while one lucky frame cannot carry a poor one. Detection stays with YuNet,
-one detector for the whole service.
+**Face match.** SCRFD detects the face and ArcFace (`w600k_r50`, InsightFace's
+buffalo_l pack) turns it into 512 unit-length numbers, for the document portrait
+and for the captured frames alike, compared by cosine similarity. Both images go
+through the same detector and the same alignment (`face_align.norm_crop` onto
+ArcFace's 112x112 template), because any difference in framing that survives into
+the model shows up as a difference between people. Only frames where the person
+faced the camera are compared: the frames from the head movements prove liveness,
+not identity, and a turned face scores lower against a passport-style portrait
+whoever it belongs to. The score is the mean of the best few frontal frames, so a
+handful of poor ones cannot sink a genuine capture while one lucky frame cannot
+carry a poor one. Detection for liveness stays with YuNet.
 
 `POST /v1/face/liveness` runs the liveness half on its own, without a document.
 
@@ -145,38 +168,45 @@ given, so a page that lies about what it saw changes nothing.
 
 ### Reading the score
 
-`match.score` is a cosine similarity, not a percentage: it is the cosine of the
-angle between the two embeddings. Multiplying it by 100 would mislead, because the
-pass line is 0.407 for SFace, so a comfortable pass would read as "56%".
+`match.score` is a cosine similarity between two unit-length ArcFace vectors, not
+a percentage: it is the cosine of the angle between them, from -1 to 1. It is
+reported next to the line it was judged against, and nothing rescales it.
 
-`match.confidence` is the number to show people. It is DeepFace's calibrated
-confidence for the verdict (`find_confidence`, a logistic regression they fitted
-per model), expressed as a percentage: 51 to 100 when it says same person, 0 to 49
-when it says different. It jumps at the threshold by design, because it states
-confidence in the answer rather than how alike two faces are.
+No confidence percentage is returned. A similarity is not a probability, and the
+calibration set that would let us convert one into the other honestly does not
+exist yet. A number that looks like a probability and is not would be read as one.
 
 ### Where the pass threshold comes from
 
-It is **DeepFace's own tuned threshold** for whichever model is configured, read at
-runtime rather than written into our code. DeepFace keeps one value per model and
-distance metric and exposes it as `find_threshold(model, "cosine")`; it is stated
-as a cosine *distance*, so the similarity line is 1 minus that. The scales differ
-completely between models, which is why the number must follow the model:
+It is **measured**, and it lives in `app/rules/face.py` as `MATCH_THRESHOLD`,
+currently **0.40**. InsightFace publishes no threshold for this pack, because the
+right line depends on how the images were taken, and ours are a photograph printed
+on an identity card against a webcam frame.
 
-| Model | cosine distance | pass line as similarity |
-|---|---|---|
-| SFace (our default) | 0.593 | 0.407 |
-| Facenet512 | 0.300 | 0.700 |
-| ArcFace | 0.680 | 0.320 |
+What it was set from, one person's Rwandan national ID and driving licence against
+20 frames of their own capture and against six strangers:
 
-To read the source: `deepface/modules/verification.py` (`find_threshold`), and
-`app/engines/recognition.py` (`pass_threshold`) for how we ask for it.
+| comparison | score |
+|---|---|
+| same person, frontal frames against own ID | 0.524 to 0.583 |
+| same person, frames from the head movements | 0.461 to 0.559 |
+| different people | 0.02 to 0.09 |
+
+The two groups are half a point apart, so the line sits between them rather than
+inside either. For reference, DeepFace publishes 0.32 for its own ArcFace, and the
+service this engine was modelled on uses 0.65 against its own images, which would
+have refused every genuine pair measured here.
+
+This is not yet a calibration set. The strangers were easy negatives. Hard
+negatives, people of similar age and appearance photographed the same way, are
+what the line should finally be set against.
 
 What is ours, and marked as such in `app/rules/face.py`:
 
-- `MATCH_REVIEW_MARGIN`, how far below the line still goes to a person rather than
-  being rejected outright
+- `MATCH_THRESHOLD`, the pass line, with the measurements above behind it
 - `MATCH_TOP_FRAMES`, scoring on the best few frames instead of all of them
+- `FRONTAL_PITCH_DEGREES`, with `FRONTAL_DEGREES`, which frames count as facing
+  the camera and so are allowed to decide identity
 - the live capture quality limits
 
 **The document portrait sets the ceiling.** Everything is matched against it, so
@@ -188,18 +218,20 @@ an 87 px face with eyes 31 px apart, and against it a different person scored
 *higher* than the true owner. Those documents are refused with
 `DOCUMENT_PHOTO_TOO_SMALL` instead of being matched.
 
-**A measured false accept.** With SFace, one person's face against a different
-person's Rwandan ID scored 0.4275 while the published line is 0.407, and their own
-genuine pairs scored 0.50 to 0.57. Genuine and impostor scores crowd the published
-line on card-to-selfie work, so a pass now requires `MATCH_PASS_MARGIN` of clear
-air above it, and the band around the line goes to a person. That single pair is
-not a calibration; it is a warning.
+**A measured false accept, and what it changed.** An earlier version used SFace,
+where one person's face against a different person's Rwandan ID scored 0.4275
+against a published line of 0.407: a stranger accepted. The replacement, Facenet512,
+fixed that but sat too close the other way, with genuine pairs from 0.60 to 0.77
+against a 0.700 line, so the same true person passed or failed depending on the
+light. ArcFace separates the two groups much further apart on this material:
+genuine 0.46 to 0.58, strangers 0.02 to 0.09.
 
 **Still to do: calibration.** NIST SP 800-63-4 asks identity proofing at IAL2 to run
 at a false match rate of 1 in 10,000 or better with a false non-match rate under 5%.
 Hitting a stated error rate needs pairs of genuine and different people from our own
-population; DeepFace's threshold was tuned on public photo sets, not on ID cards
-against webcams. Until that is measured, treat the line as inherited, not verified.
+population, photographed the way ours are: printed card photographs against webcam
+frames. Until that is measured, `MATCH_THRESHOLD` is a line drawn between two small
+measured groups, not a verified operating point.
 
 ## Test pages
 

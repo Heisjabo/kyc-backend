@@ -82,46 +82,61 @@ MIN_FACE_FRAME_RATIO = 0.7
 # The still we keep: sharpness of the chosen frontal frame.
 MIN_CAPTURE_BLUR_SCORE = 60.0
 
-# How the face is prepared before embedding: warped onto a canonical template so
-# that a card portrait and a camera frame are framed identically (the alignment
-# step described in the MTCNN+FaceNet verification literature).
-#
-# ALIGN_ZOOM shrinks the template inside the frame, leaving margin around the
-# face. The ArcFace template alone (1.00) is tighter than what Facenet512 was
-# trained on. Measured on a real pair, genuine against impostor:
-#   1.00 -> 0.657 / 0.580   0.85 -> 0.639 / 0.650   0.75 -> 0.684 / 0.596
-#   0.65 -> 0.725 / 0.585   0.55 -> 0.714 / 0.693
-# 0.65 separates best. Tuned on one pair, so re-measure with the calibration set.
-ALIGN_ZOOM = 0.65
-ALIGN_MARGIN = 0.25      # only used by the fallback crop
-ALIGN_SIZE = (160, 160)  # Facenet512 input size
+# Matching: SCRFD detection, InsightFace alignment, ArcFace embeddings
+# (engines/recognition.py). Detection and alignment are the model pack's own, so
+# the document portrait and the camera frame are prepared identically.
+DETECT_SIZE = (640, 640)   # what SCRFD resizes to; the pack's own default
+DETECT_THRESHOLD = 0.6     # below this a detection is not confidently a face
 
-# Face match. The pass line is NOT set here: it is DeepFace's own tuned threshold
-# for the configured model, read at runtime (see engines/recognition.pass_threshold).
-# For SFace that is a cosine distance of 0.593, so a similarity of 0.407.
+# The pass line. Cosine similarity between two unit-length ArcFace vectors, so it
+# runs from -1 to 1 and a score is directly comparable between runs.
 #
-# The face match is a yes or no: there is no "maybe" band, the way there is none
-# at Shufti or Didit. A capture too poor to judge is stopped before matching and
-# the person is asked to retake, rather than being scored and half-accepted.
+# InsightFace publishes no threshold for this pack, because the right line
+# depends on how the images were taken. Measured here, one person's Rwandan ID
+# and driving licence against 20 frames of their own capture, and against six
+# strangers' faces:
 #
-# The line is DeepFace's own tuned threshold for the configured model (0.700 for
-# Facenet512), measured here on two real people:
+#   same person, ID against own capture        0.46 to 0.58
+#   same person, licence against own capture   0.45 to 0.57
+#   different people                           0.02 to 0.07
 #
-#   same person, live face vs own ID      0.71 to 0.75   pass
-#   different people, live face vs ID     0.58           fail
-#   different people, ID against ID       0.55           fail
+# The two groups are half a point apart, so the line sits between them rather
+# than inside either: 0.40 leaves the genuine worst case 0.06 of room and is six
+# times the highest impostor seen. For comparison, DeepFace's published line for
+# its own ArcFace is 0.32, and the FastAPI service this was modelled on uses 0.65
+# against its own images, which would have refused every genuine pair measured
+# here.
 #
-# It is per-model: SFace put two strangers' IDs at 0.482 against its 0.407 line,
-# so switching model means measuring again before trusting it.
-MATCH_PASS_MARGIN = 0.0
+# The strangers measured were easy negatives: different people, different
+# lighting, different cameras. Hard negatives, people of the same age and
+# appearance photographed the same way, are what the line should finally be set
+# against, and that calibration set does not exist yet.
+MATCH_THRESHOLD = 0.40
+
+# The match is a yes or no. There is no "maybe" band, the way there is none at
+# Shufti or Didit: a capture too poor to judge is stopped before matching and the
+# person is asked to retake, rather than being scored and half-accepted.
 
 # Frames compared against the document portrait: the sharpest frontal ones.
 MATCH_FRAMES = 8
-# The score is the mean of the best few, not of all of them. Measured on the real
-# pair above: adding camera grain drops the mean over 8 frames from 0.70 to 0.59
-# (a false rejection), while the best 3 only fall from 0.78 to 0.69. A handful of
-# poor frames should not outvote the ones where the face is clearly visible.
+# The score is the mean of the best few, not of all of them. A handful of poor
+# frames should not outvote the ones where the face is clearly visible, and one
+# lucky frame alone should not carry a decision.
 MATCH_TOP_FRAMES = 3
+
+# Only frames where the person faces the camera are compared. The frames from the
+# head movements are evidence of liveness, not of identity: a face turned away
+# scores lower against a passport-style portrait whoever it belongs to, which
+# pushes genuine people under the line. Measured on one capture, the same
+# person's ID against their own 20 frames:
+#
+#   frontal (yaw <= 8, pitch <= 10), 6 frames    0.5242 to 0.5833, mean 0.5673
+#   from the movements, 14 frames                0.4612 to 0.5591, mean 0.5239
+#
+# Frontality is judged in degrees rather than by the liveness step's "centre"
+# label, which allows up to TURN_DEGREES (18) of yaw: the two frames that label
+# accepted at 12 and 15 degrees scored 0.4842 and 0.5091, the lowest of the six.
+FRONTAL_PITCH_DEGREES = 10.0
 
 # Live feedback while the camera guides the person. Thresholds measured on the
 # face crop (not the whole frame) from real phone video: blur 40 to 92, brightness
