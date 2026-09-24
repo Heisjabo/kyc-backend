@@ -1,0 +1,236 @@
+"""Face match and the document-then-face flow.
+
+The models are stubbed: embeddings are plain vectors and the detector returns
+faces built by hand, so these test the decision logic, not DeepFace itself.
+"""
+
+import numpy as np
+import pytest
+from fastapi.testclient import TestClient
+
+from app.api.v1.routes import verifications as verifications_route
+from app.main import app
+from app.core.config import settings
+from app.engines.recognition import pass_threshold
+from app.pipeline.face_match import match_faces
+from app.rules import face as face_rules
+from app.storage import sessions
+from tests.meshes import mesh
+from tests.test_liveness import face_at, frame_bytes, full_capture, stub
+
+client = TestClient(app)
+
+
+def vector(similarity_to_reference: float) -> np.ndarray:
+    """A 2-D vector whose cosine similarity to (1, 0) is the value asked for."""
+    angle = np.arccos(np.clip(similarity_to_reference, -1, 1))
+    return np.array([np.cos(angle), np.sin(angle)], dtype=np.float32)
+
+
+REFERENCE = vector(1.0)
+
+
+def rules_ttl_seconds() -> int:
+    return settings.SESSION_TTL_MINUTES * 60
+
+
+# The pass line is DeepFace's tuned threshold for the configured model, so the
+# tests work relative to it rather than hardcoding a number of their own.
+LINE = pass_threshold()                                  # DeepFace's tuned threshold
+PASSES = LINE + face_rules.MATCH_PASS_MARGIN             # what we require to pass
+FAILS = LINE - 0.15   # comfortably below the line
+
+
+# Face match
+
+def test_pass_line_is_deepfaces_threshold_for_this_model():
+    from deepface.modules.verification import find_threshold
+
+    assert LINE == pytest.approx(1 - find_threshold(settings.FACE_RECOGNITION_MODEL, "cosine"))
+    assert PASSES == pytest.approx(LINE + face_rules.MATCH_PASS_MARGIN)
+
+
+def test_scores_measured_on_two_real_people_land_where_they_should():
+    """Measured with Facenet512 on two people's Rwandan IDs and a real capture:
+    the owner scores 0.71 to 0.75, a different person 0.55 to 0.58."""
+    owner = match_faces(REFERENCE, [vector(0.75), vector(0.73), vector(0.71)])
+    stranger = match_faces(REFERENCE, [vector(0.58), vector(0.55), vector(0.57)])
+    assert owner.check.status == "pass"
+    assert stranger.check.status == "fail"
+    assert stranger.check.reasons == ["FACE_MISMATCH"]
+
+
+def test_match_passes_when_the_faces_are_alike():
+    result = match_faces(REFERENCE, [vector(PASSES + 0.05), vector(PASSES + 0.02), vector(PASSES + 0.08)])
+    assert result.check.status == "pass"
+    assert result.threshold == pytest.approx(PASSES, abs=0.001)
+    assert result.frames_compared == 3
+
+
+def test_match_fails_for_a_different_person():
+    result = match_faces(REFERENCE, [vector(FAILS - 0.2), vector(FAILS - 0.15), vector(FAILS - 0.22)])
+    assert result.check.status == "fail"
+    assert result.check.reasons == ["FACE_MISMATCH"]
+
+
+def test_just_below_the_line_fails_rather_than_hedging():
+    result = match_faces(REFERENCE, [vector(PASSES - 0.03), vector(PASSES - 0.05), vector(PASSES - 0.02)])
+    assert result.check.status == "fail"
+    assert result.check.reasons == ["FACE_MISMATCH"]
+
+
+def test_one_good_frame_does_not_carry_a_poor_capture():
+    # The score is the mean of the best few, so a single flattering frame among
+    # poor ones cannot pass on its own.
+    poor = FAILS - 0.2
+    result = match_faces(REFERENCE, [vector(0.95), vector(poor), vector(poor), vector(poor)])
+    assert result.best_score == pytest.approx(0.95, abs=0.01)
+    assert result.check.status == "fail"
+
+
+def test_a_few_grainy_frames_do_not_sink_a_genuine_capture():
+    # Measured on real captures: grain pulls some frames well down while the good
+    # ones stay high. The person should still pass.
+    result = match_faces(
+        REFERENCE,
+        [vector(PASSES + 0.09), vector(PASSES + 0.06), vector(PASSES + 0.04), vector(FAILS - 0.1), vector(FAILS - 0.15)],
+    )
+    assert result.check.status == "pass"
+    assert result.check.details["mean_all_frames"] < result.score
+
+
+def test_document_without_a_portrait_is_the_documents_problem():
+    result = match_faces(None, [vector(0.8)])
+    assert result.check.status == "fail"
+    assert result.check.reasons == ["NO_FACE_ON_DOCUMENT"]
+
+
+def test_no_face_captured_fails():
+    result = match_faces(REFERENCE, [])
+    assert result.check.status == "fail"
+    assert result.check.reasons == ["NO_FACE_CAPTURED"]
+
+
+# The flow: a scanned document, then the face step against it
+
+def test_a_small_document_portrait_is_flagged_but_still_matched(monkeypatch):
+    """A screenshot of an ID gives a portrait far smaller than a reference photo
+    should be. That is worth reporting, but it does not stop the check."""
+    import numpy as np
+
+    from app.api.v1.routes import verifications as route
+    from app.rules import face as rules
+    from tests.test_liveness import face_at, frame_bytes
+
+    small = face_at(size=rules.SMALL_DOCUMENT_FACE_HEIGHT - 40)
+    monkeypatch.setattr(route, "detect_faces", lambda image: small)
+    monkeypatch.setattr(route, "embed", lambda image, face=None: np.array([1.0, 0.0], dtype=np.float32))
+    session, portrait = route.open_session("id_card", "pass", None, frame_bytes())
+    assert portrait == "small"
+    assert session.document_face_small
+    assert session.document_embedding is not None      # still usable
+
+
+@pytest.fixture
+def session_with_document():
+    return sessions.create(
+        document_type="id_card",
+        document_decision="pass",
+        document_fields={"source": "visual", "full_name": "KWIZERA ALICE", "document_number": "1200280111110063"},
+        document_embedding=REFERENCE,
+        document_face_base64=None,
+    )
+
+
+def stub_capture(monkeypatch, similarity_value: float, meshes=None):
+    """A complete, genuine-looking capture, matching at the similarity given."""
+    meshes = meshes or full_capture()
+    stub(monkeypatch, [face_at() for _ in meshes], meshes)
+    monkeypatch.setattr(verifications_route, "embed", lambda image, face=None: vector(similarity_value))
+    monkeypatch.setattr(verifications_route, "detect_faces", lambda image: face_at())
+    monkeypatch.setattr(verifications_route, "crop_face", lambda image, face, margin=0.1: image)
+    return meshes
+
+
+def post_frames(verification_id: str, count: int):
+    files = [("frames", (f"f{i}.jpg", frame_bytes(seed=i), "image/jpeg")) for i in range(count)]
+    return client.post(f"/v1/verifications/{verification_id}/face", files=files, data={"challenge": "full"})
+
+
+def test_face_step_passes_against_the_scanned_document(monkeypatch, session_with_document):
+    meshes = stub_capture(monkeypatch, PASSES + 0.08)
+
+    response = post_frames(session_with_document.id, len(meshes))
+    assert response.status_code == 200
+    body = response.json()
+    assert body["decision"] == "pass", body["reasons"]
+    assert body["match"]["score"] == pytest.approx(PASSES + 0.08, abs=0.01)
+    assert body["document"]["full_name"] == "KWIZERA ALICE"
+
+
+def test_face_step_fails_for_someone_else(monkeypatch, session_with_document):
+    meshes = stub_capture(monkeypatch, FAILS - 0.2)
+
+    body = post_frames(session_with_document.id, len(meshes)).json()
+    assert body["decision"] == "fail"
+    assert "FACE_MISMATCH" in body["reasons"]
+
+
+def test_failed_liveness_is_reported_even_when_the_face_matches(monkeypatch, session_with_document):
+    # A still photo of the real person: the face matches, nothing ever moves.
+    meshes = stub_capture(monkeypatch, PASSES + 0.1, meshes=[mesh() for _ in range(8)])
+
+    body = post_frames(session_with_document.id, len(meshes)).json()
+    assert body["decision"] == "retake"
+    assert "CHALLENGE_NOT_COMPLETED" in body["reasons"]
+
+
+def test_a_flat_photo_that_completes_the_turns_is_still_rejected(monkeypatch, session_with_document):
+    """The tilted-print attack: the movements happen, but the surface is flat."""
+    photo = [mesh(yaw, flat=True) for yaw in (0, 0, -30, -30, 0, 30, 30, 0, 0)]
+    stub_capture(monkeypatch, PASSES + 0.1, meshes=photo)
+
+    body = post_frames(session_with_document.id, len(photo)).json()
+    assert body["decision"] == "retake"
+    assert "FLAT_SURFACE_DETECTED" in body["reasons"]
+
+
+def test_unknown_verification_is_rejected():
+    response = post_frames("does-not-exist", count=8)
+    assert response.status_code == 404
+
+
+def test_expired_session_is_gone(session_with_document):
+    session_with_document.created_at -= rules_ttl_seconds() + 60
+    assert sessions.get(session_with_document.id) is None
+
+
+# Test pages
+
+def test_pages_render():
+    assert "Document scan" in client.get("/").text
+    assert "Face check" in client.get("/verify/anything").text
+    assert client.get("/static/style.css").status_code == 200
+
+
+def test_session_endpoint_feeds_the_face_page(session_with_document):
+    body = client.get(f"/api/session/{session_with_document.id}").json()
+    assert body["document_type"] == "id_card"
+    assert body["fields"]["full_name"] == "KWIZERA ALICE"
+    assert client.get("/api/session/nope").status_code == 404
+
+
+def test_confidence_is_deepfaces_calibrated_percentage():
+    """The percentage is DeepFace's own logistic fit, not a rescaled similarity."""
+    from deepface.modules.verification import find_confidence
+
+    result = match_faces(REFERENCE, [vector(PASSES + 0.1), vector(PASSES + 0.1), vector(PASSES + 0.1)])
+    expected = find_confidence(1 - result.score, settings.FACE_RECOGNITION_MODEL, True, "cosine")
+    assert result.confidence == pytest.approx(expected, abs=0.1)
+    assert result.confidence > 50
+
+
+def test_confidence_drops_below_fifty_when_it_says_different_person():
+    result = match_faces(REFERENCE, [vector(FAILS - 0.2), vector(FAILS - 0.2), vector(FAILS - 0.2)])
+    assert result.check.status == "fail"
+    assert result.confidence < 50

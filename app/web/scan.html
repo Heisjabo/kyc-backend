@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>KYC test: document</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<main>
+  <h1>Document scan</h1>
+  <p class="lead">Test harness for the KYC service. Scan a document, then continue to the face check.</p>
+
+  <form id="form">
+    <label>Document type
+      <select name="document_type">
+        <option value="id_card">National ID</option>
+        <option value="passport">Passport</option>
+        <option value="driving_license">Driving licence</option>
+      </select>
+    </label>
+
+    <label>Front (photo page / front side)
+      <input type="file" name="front" accept="image/*" required>
+    </label>
+
+    <label>Back (optional)
+      <input type="file" name="back" accept="image/*">
+    </label>
+
+    <div class="row">
+      <label>First name <input type="text" name="first_name" placeholder="Jean"></label>
+      <label>Last name <input type="text" name="last_name" placeholder="Mugisha"></label>
+    </div>
+    <div class="row">
+      <label>Date of birth <input type="date" name="date_of_birth"></label>
+      <label>Country <input type="text" name="issuing_country" placeholder="RW"></label>
+    </div>
+
+    <button type="submit" id="submit">Scan document</button>
+  </form>
+
+  <div id="status" class="status"></div>
+  <div id="result" hidden>
+    <div id="verdict" class="verdict"></div>
+    <a id="next" class="button" href="#">Continue to face check</a>
+    <details><summary>Full response</summary><pre id="json"></pre></details>
+  </div>
+</main>
+
+<script>
+const form = document.getElementById('form');
+const status = document.getElementById('status');
+const result = document.getElementById('result');
+
+form.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const data = new FormData(form);
+  for (const [key, value] of [...data.entries()]) {
+    if (value === '' || (value instanceof File && value.size === 0)) data.delete(key);
+  }
+
+  status.textContent = 'Scanning...';
+  result.hidden = true;
+  document.getElementById('submit').disabled = true;
+
+  try {
+    const response = await fetch('/v1/document/scan', { method: 'POST', body: data });
+    const body = await response.json();
+    status.textContent = '';
+    document.getElementById('json').textContent = JSON.stringify(body, null, 2);
+
+    const verdict = document.getElementById('verdict');
+    verdict.className = 'verdict ' + (body.decision || 'fail');
+    verdict.innerHTML = `<strong>${(body.decision || 'error').toUpperCase()}</strong>` +
+      (body.reasons?.length ? `<span>${body.reasons.join(', ')}</span>` : '') +
+      (body.extracted ? `<span>${body.extracted.full_name || ''} · ${body.extracted.document_number || ''}</span>` : '');
+
+    const next = document.getElementById('next');
+    if (body.face_verification_url) {
+      next.href = body.face_verification_url;
+      next.hidden = false;
+    } else {
+      next.hidden = true;
+      status.textContent = 'No photo of a face was found on this document.';
+    }
+    result.hidden = false;
+  } catch (error) {
+    status.textContent = 'Request failed: ' + error;
+  } finally {
+    document.getElementById('submit').disabled = false;
+  }
+});
+</script>
+</body>
+</html>

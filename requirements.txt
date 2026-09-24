@@ -3,6 +3,11 @@ uvicorn[standard]==0.32.*
 pydantic-settings==2.*
 python-multipart==0.0.*
 
+# Database
+sqlalchemy==2.*
+alembic==1.*
+psycopg[binary]==3.*
+
 # Document check
 opencv-python==5.*
 pillow==12.*
@@ -12,3 +17,10 @@ rapidocr==3.*
 onnxruntime==1.*
 mrz==0.6.*
 rapidfuzz==3.*
+
+# Face match. The backend is named explicitly: a coming deepface release stops
+# installing one by default. tf-keras is needed alongside TensorFlow 2.21.
+# Together they are ~1.4 GB installed, which dominates the image size.
+deepface[tensorflow]==0.0.*
+tensorflow==2.21.*
+tf-keras==2.21.*

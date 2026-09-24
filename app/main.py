@@ -1,5 +1,6 @@
 from fastapi import FastAPI
 
+from app.api.pages import router as pages_router
 from app.api.v1.router import api_router
 from app.core.config import settings
 
@@ -13,6 +14,7 @@ def create_app() -> FastAPI:
     )
 
     app.include_router(api_router, prefix="/v1")
+    app.include_router(pages_router)
 
     return app
 
