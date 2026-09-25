@@ -3,9 +3,11 @@ from fastapi import FastAPI
 from app.api.pages import router as pages_router
 from app.api.v1.router import api_router
 from app.core.config import settings
+from app.core.security import check_configuration
 
 
 def create_app() -> FastAPI:
+    check_configuration()
     app = FastAPI(
         title=settings.APP_NAME,
         version=settings.APP_VERSION,

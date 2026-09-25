@@ -24,7 +24,9 @@ import uuid
 from datetime import date, datetime
 
 from sqlalchemy import (
+    Boolean,
     Date,
+    DateTime,
     Enum,
     ForeignKey,
     Integer,
@@ -64,6 +66,100 @@ IMAGE_SIDE = _pg_enum(ImageSide, "image_side")
 
 _EMPTY_LIST = text("'[]'::jsonb")
 _EMPTY_OBJECT = text("'{}'::jsonb")
+
+
+class Account(Base):
+    """A customer of this service: the person or organisation calling the API.
+
+    Not to be confused with User below, which is a person being *verified*. An
+    account holds API keys and, later, the verifications made under them.
+
+    The fields follow tuesday-backend's signup, minus the parts that belong to
+    its trading flow (role, amount, stock) and to its entity path (company
+    representatives), so a person signing up here is asked what they are already
+    asked over there.
+    """
+
+    __tablename__ = "accounts"
+
+    id: Mapped[UuidPk]
+    # Stored lower-cased, so "Jean@X.com" and "jean@x.com" are one account.
+    email: Mapped[str] = mapped_column(String, unique=True, nullable=False, index=True)
+    # Argon2id. The plain password is never held longer than the request.
+    password_hash: Mapped[str] = mapped_column(String, nullable=False)
+
+    first_name: Mapped[str] = mapped_column(String, nullable=False)
+    last_name: Mapped[str] = mapped_column(String, nullable=False)
+    # Kept apart from the number itself, the way tuesday-backend keeps it: the
+    # same number reads differently under a different dialling code.
+    country_code: Mapped[str] = mapped_column(String(8), nullable=False)
+    phone: Mapped[str] = mapped_column(String(32), nullable=False)
+    date_of_birth: Mapped[date] = mapped_column(Date, nullable=False)
+    country: Mapped[str] = mapped_column(String, nullable=False)
+
+    # Asked for, and kept when given, but not required: an account is usable
+    # without them and refusing one for a missing city helps nobody.
+    gender: Mapped[str | None] = mapped_column(String(32))
+    city: Mapped[str | None] = mapped_column(String)
+    address: Mapped[str | None] = mapped_column(String)
+
+    # A suspended account keeps its keys and its history; they simply stop working.
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"))
+    last_login_at: Mapped[Timestamp | None]
+    created_at: Mapped[CreatedAt]
+    updated_at: Mapped[UpdatedAt]
+
+    api_keys: Mapped[list["ApiKey"]] = relationship(back_populates="account", passive_deletes=True)
+
+
+class ApiKey(Base):
+    """A key that authorises calls made on an account's behalf.
+
+    The key itself is shown once, at creation, and never again: only its hash is
+    kept, so a copy of this table is not a set of working credentials. The prefix
+    is stored in the clear because it is how a presented key is found, and it is
+    what a person recognises in a list of keys.
+
+    Keys expire. A key that lives forever is one nobody ever rotates.
+    """
+
+    __tablename__ = "api_keys"
+
+    id: Mapped[UuidPk]
+    account_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    # What this key is for, in the owner's words: "production", "staging tests".
+    name: Mapped[str] = mapped_column(String, nullable=False)
+    prefix: Mapped[str] = mapped_column(String(16), unique=True, nullable=False, index=True)
+    secret_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    expires_at: Mapped[Timestamp] = mapped_column(DateTime(timezone=True), nullable=False)
+    # Written on use, so a key nobody calls can be found and removed.
+    last_used_at: Mapped[Timestamp | None]
+    revoked_at: Mapped[Timestamp | None]
+    created_at: Mapped[CreatedAt]
+
+    account: Mapped["Account"] = relationship(back_populates="api_keys")
+
+
+class PasswordReset(Base):
+    """A single-use token for setting a forgotten password.
+
+    Only the hash is stored: somebody who reads this table cannot use what they
+    find to take over an account. The row survives its use so that a reset can be
+    accounted for afterwards.
+    """
+
+    __tablename__ = "password_resets"
+
+    id: Mapped[UuidPk]
+    account_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, nullable=False, index=True)
+    expires_at: Mapped[Timestamp] = mapped_column(DateTime(timezone=True), nullable=False)
+    used_at: Mapped[Timestamp | None]
+    created_at: Mapped[CreatedAt]
 
 
 class User(Base):

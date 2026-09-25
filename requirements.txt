@@ -8,6 +8,13 @@ sqlalchemy==2.*
 alembic==1.*
 psycopg[binary]==3.*
 
+# Accounts and API keys. Argon2id for passwords (the OWASP recommendation),
+# PyJWT for dashboard sessions.
+argon2-cffi==25.*
+pyjwt==2.*
+# EmailStr validation in the auth schemas.
+email-validator==2.*
+
 # Document check
 opencv-python==5.*
 pillow==12.*
