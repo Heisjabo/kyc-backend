@@ -164,3 +164,11 @@ READY_FRAMES = 3
 
 # Frames used to learn the person's resting pose before the challenge starts.
 CALIBRATION_FRAMES = 4
+
+
+# The liveness clip. Kept so a disputed check can be reviewed by a person later,
+# and so a new model can be run over a real capture rather than a test set. A few
+# seconds at browser quality is about a megabyte; the ceiling is generous because
+# refusing the evidence would be worse than storing a large file.
+MAX_VIDEO_BYTES = 25 * 1024 * 1024
+ALLOWED_VIDEO_TYPES = {"video/webm", "video/mp4", "video/quicktime"}

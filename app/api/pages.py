@@ -21,6 +21,12 @@ def scan_page() -> HTMLResponse:
     return HTMLResponse((WEB_DIR / "scan.html").read_text())
 
 
+@router.get("/capture", response_class=HTMLResponse)
+def capture_page() -> HTMLResponse:
+    """Guided document capture: the camera holds off until the card is readable."""
+    return HTMLResponse((WEB_DIR / "capture.html").read_text())
+
+
 @router.get("/verify/{verification_id}", response_class=HTMLResponse)
 def verify_page(verification_id: str) -> HTMLResponse:
     return HTMLResponse((WEB_DIR / "verify.html").read_text())
