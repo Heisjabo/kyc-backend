@@ -114,14 +114,19 @@ const WORDING = { pass: 'Verified', review: 'Needs a closer look', fail: 'Not ve
 const TURN_TARGET = 18;   // degrees, matches TURN_DEGREES on the server
 const NOD_TARGET = 12;    // matches NOD_DEGREES
 const READY_FRAMES = 3;         // consecutive good frames before capture begins
+const PORTRAIT_HOLD_FRAMES = 2; // frames square to the camera before the shutter
+const PORTRAIT_MAX_DEGREES = 8; // how far off straight-on the head may be for the portrait
+const PORTRAIT_ATTEMPTS = 6;
 const READY_TIMEOUT_MS = 12000; // then start anyway: guidance must never trap anyone
 const CALIBRATION_FRAMES = 4;
-const HOLD_CENTRE_FRAMES = 3;
 const STEP_TIMEOUT_MS = 25000;
 const PROBE_GAP_MS = 0;     // sample as fast as the round trip allows
 
 let baseline = null;
 let kept = [];
+let portraitBlob = null;      // the one still identity is decided on
+let recorder = null, clipChunks = [], clipBlob = null;
+let documentType = null;      // a birth certificate means a child's check
 let claimed = [];   // {index, step}: which frame the guidance accepted for which step
 let cancelled = false;
 
@@ -141,6 +146,7 @@ async function loadSession() {
     }
   }
   const fields = document.getElementById('document-fields');
+  documentType = session.document_type;
   const shown = { document_type: session.document_type, decision: session.document_decision, ...session.fields };
   for (const [key, value] of Object.entries(shown)) {
     if (value === null || value === undefined || value === '') continue;
@@ -175,6 +181,85 @@ function grabFrame() {
 }
 
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/** The sound a camera makes. Generated rather than loaded: a shutter is two
+ *  short clicks, and shipping an audio file for that is not worth it. */
+function shutterSound() {
+  try {
+    const context = new (window.AudioContext || window.webkitAudioContext)();
+    const click = (at, frequency) => {
+      const oscillator = context.createOscillator(), gain = context.createGain();
+      oscillator.type = 'square';
+      oscillator.frequency.value = frequency;
+      gain.gain.setValueAtTime(0.0001, context.currentTime + at);
+      gain.gain.exponentialRampToValueAtTime(0.25, context.currentTime + at + 0.005);
+      gain.gain.exponentialRampToValueAtTime(0.0001, context.currentTime + at + 0.05);
+      oscillator.connect(gain).connect(context.destination);
+      oscillator.start(context.currentTime + at);
+      oscillator.stop(context.currentTime + at + 0.06);
+    };
+    click(0, 2200);
+    click(0.07, 1400);
+    setTimeout(() => context.close(), 400);
+  } catch (error) { /* a silent shutter is not worth failing a check over */ }
+}
+
+/** Light the face for the shot: the phone's torch where the camera has one,
+ *  a white screen everywhere else, which is what a laptop can offer. */
+async function flash() {
+  const track = video.srcObject && video.srcObject.getVideoTracks()[0];
+  const capabilities = track && track.getCapabilities ? track.getCapabilities() : {};
+  if (capabilities.torch) {
+    try {
+      await track.applyConstraints({ advanced: [{ torch: true }] });
+      await wait(250);
+      await track.applyConstraints({ advanced: [{ torch: false }] });
+      return;
+    } catch (error) { /* fall through to the screen flash */ }
+  }
+  const sheet = document.createElement('div');
+  sheet.style.cssText = 'position:fixed;inset:0;background:#fff;opacity:.85;z-index:9999;transition:opacity .25s';
+  document.body.appendChild(sheet);
+  await wait(120);
+  sheet.style.opacity = '0';
+  setTimeout(() => sheet.remove(), 300);
+}
+
+/** Take the portrait: the single photograph the match is made on. */
+async function takePortrait() {
+  shutterSound();
+  await flash();
+  portraitBlob = await grabFrame();
+  return portraitBlob;
+}
+
+/** Record the challenge, so a disputed check can be looked at later. Nothing is
+ *  stored yet, but the clip is produced and sent so that storage is the only
+ *  thing left to add. */
+function startRecording() {
+  clipChunks = [];
+  clipBlob = null;
+  if (!window.MediaRecorder || !video.srcObject) return;
+  const types = ['video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm', 'video/mp4'];
+  const type = types.find((candidate) => MediaRecorder.isTypeSupported(candidate));
+  if (!type) return;
+  try {
+    recorder = new MediaRecorder(video.srcObject, { mimeType: type, videoBitsPerSecond: 800000 });
+    recorder.ondataavailable = (event) => { if (event.data.size) clipChunks.push(event.data); };
+    recorder.start(1000);
+  } catch (error) { recorder = null; }
+}
+
+function stopRecording() {
+  return new Promise((resolve) => {
+    if (!recorder || recorder.state === 'inactive') return resolve(null);
+    recorder.onstop = () => {
+      clipBlob = new Blob(clipChunks, { type: recorder.mimeType.split(';')[0] });
+      resolve(clipBlob);
+    };
+    recorder.stop();
+  });
+}
 
 /** Send one frame for live feedback: is it usable, and which way is the head pointing? */
 async function probe(blob, calibrate = false) {
@@ -261,6 +346,8 @@ async function run() {
 
   // 0. Check the camera and the room before asking anyone to move: lighting,
   //    sharpness, framing and distance must all be right first.
+  portraitBlob = null;
+  startRecording();
   prompt.textContent = 'Checking your camera';
   if (!await waitUntilReady()) {
     status.textContent = 'Starting anyway: the camera view is not ideal, so this may need a retry.';
@@ -289,13 +376,28 @@ async function run() {
     setProgress(++done, total);
   }
 
-  // 3. Back to centre for the photo we keep.
-  prompt.textContent = INSTRUCTION.centre;
-  for (let i = 0; i < HOLD_CENTRE_FRAMES; i++) {
-    const step = await waitFor((result) => result.direction === 'centre');
-    if (!step) return giveUp('Look straight at the camera to finish.');
+  // 3. The portrait. Identity is decided on this one photograph, so it is not
+  //    any old centred frame: the head has to be square to the camera and the
+  //    view has to be usable, held for a moment, exactly as a person would be
+  //    asked to hold still before a shutter. The frames stay for liveness.
+  prompt.textContent = 'Look straight at the camera';
+  hint.textContent = 'Hold still for the photo';
+  let square = 0;
+  for (let attempt = 0; attempt < PORTRAIT_ATTEMPTS && square < PORTRAIT_HOLD_FRAMES; attempt++) {
+    const step = await waitFor((result) =>
+      result.direction === 'centre' &&
+      Math.abs(result.yaw ?? 99) <= PORTRAIT_MAX_DEGREES &&
+      Math.abs(result.pitch ?? 99) <= PORTRAIT_MAX_DEGREES &&
+      result.usable);
+    if (!step) { square = 0; continue; }
+    square += 1;
     kept.push(step.blob);
   }
+  if (square < PORTRAIT_HOLD_FRAMES) return giveUp('Look straight at the camera to finish.');
+
+  prompt.textContent = 'Taking your photo';
+  await takePortrait();
+  kept.push(portraitBlob);
   setProgress(++done, total);
 
   await submit(challenge);
@@ -344,8 +446,14 @@ async function submit(challenge) {
   hint.textContent = '';
   prompt.textContent = 'Checking your identity';
 
+  const clip = await stopRecording();
+
   const data = new FormData();
   kept.forEach((blob, index) => data.append('frames', blob, `frame_${index}.jpg`));
+  // The photograph identity is decided on, separate from the liveness frames.
+  if (portraitBlob) data.append('portrait', portraitBlob, 'portrait.jpg');
+  // The clip is evidence of how the check went. Nothing stores it yet.
+  if (clip && clip.size) data.append('video', clip, 'challenge.webm');
   data.append('challenge', challenge);
   // Which frame was captured for which step. The server measures each of these
   // frames itself, so this cannot be used to claim a movement that never
@@ -354,7 +462,10 @@ async function submit(challenge) {
   data.append('steps', JSON.stringify(claimed));
 
   try {
-    const response = await fetch(`/v1/verifications/${verificationId}/face`, { method: 'POST', body: data });
+    // A child verifies with a birth certificate, which carries no photograph, so
+    // their check proves liveness and keeps a portrait rather than matching one.
+    const endpoint = documentType === 'birth_certificate' ? 'child-face' : 'face';
+    const response = await fetch(`/v1/verifications/${verificationId}/${endpoint}`, { method: 'POST', body: data });
     show(await response.json(), response.ok);
   } catch (error) {
     status.textContent = 'Request failed: ' + error;
@@ -400,10 +511,12 @@ function show(body, ok) {
     (body.warnings.length ? `<span class="muted">${body.warnings.join(', ')}</span>` : '');
 
   const challenge = body.liveness.challenge;
-  document.getElementById('scores').innerHTML = `
-    <dt>match score</dt><dd>${body.match.score ?? '-'} (pass at ${body.match.threshold})</dd>
-    <dt>best frame</dt><dd>${body.match.best_score ?? '-'}</dd>
-    <dt>frames compared</dt><dd>${body.match.frames_compared}</dd>
+  const matched = body.match
+    ? `<dt>match score</dt><dd>${body.match.score ?? '-'} (pass at ${body.match.threshold})</dd>
+       <dt>compared</dt><dd>${body.match.check?.details?.portrait_source === 'frame' ? 'best frontal frame' : 'the portrait taken'}</dd>`
+    : `<dt>face match</dt><dd>not applicable: a birth certificate carries no photograph</dd>
+       <dt>portrait kept</dt><dd>${body.portrait_kept ? 'yes' : 'no'}</dd>`;
+  document.getElementById('scores').innerHTML = matched + `
     <dt>directions</dt><dd>${challenge.completed.join(', ') || 'none'}${challenge.missing.length ? ' · missing ' + challenge.missing.join(', ') : ''}</dd>
     <dt>faces found</dt><dd>${body.liveness.frames_with_face} of ${body.liveness.frames_received}</dd>
     <dt>depth (planarity)</dt><dd>${body.liveness.planarity ?? '-'}% (a flat photo scores under 1.2)</dd>

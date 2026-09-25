@@ -8,6 +8,9 @@ class DocumentType(str, Enum):
     passport = "passport"
     id_card = "id_card"
     driving_license = "driving_license"
+    # A child's document. It carries no photograph, no expiry and no MRZ, so the
+    # checks that depend on those are skipped rather than failed.
+    birth_certificate = "birth_certificate"
 
 
 class Decision(str, Enum):
@@ -70,3 +73,22 @@ class DocumentCheckResponse(BaseModel):
     extracted: ExtractedFields | None
     checks: list[CheckResult]
     processing_ms: int
+
+
+class DocumentFrameProbe(BaseModel):
+    """Live guidance for one camera frame while a document is being held up."""
+
+    # True when nothing needs fixing, so the page may take the picture.
+    usable: bool
+    # How much of the rectangle the card covers, 0 to 1.
+    card_fill: float | None = None
+    # Lines of printed text seen: what says a document is in view at all.
+    text_lines: int | None = None
+    # The portrait's height as a share of the card's, or None if no face is seen.
+    portrait_ratio: float | None = None
+    blur_score: float | None = None
+    brightness: float | None = None
+    glare_ratio: float | None = None
+    # FIT_THE_CARD_IN_THE_BOX, TURN_THE_CARD_UPRIGHT, PORTRAIT_NOT_VISIBLE,
+    # MOVE_CLOSER, TOO_DARK, TOO_BRIGHT, GLARE_ON_THE_CARD, HOLD_STILL
+    hints: list[str] = []

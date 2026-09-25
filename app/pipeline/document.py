@@ -43,7 +43,14 @@ def scan_document(
     back: bytes | None = None,
     applicant: Applicant | None = None,
     today: date | None = None,
+    require_adult: bool = True,
 ) -> DocumentCheckResponse:
+    """Read a document and judge it.
+
+    `require_adult` is the one thing a child's check changes: a birth certificate
+    belongs to someone under 18 by definition, so the age rule is not applied. No
+    other check is relaxed, and the result says plainly that age was not required.
+    """
     started = time.perf_counter()
     today = today or date.today()
     applicant = applicant or Applicant()
@@ -125,7 +132,7 @@ def scan_document(
 
     # 6. The document itself, then 7. does it belong to the applicant.
     checks.append(_document_type_check(document_type, extracted if use_mrz else None, visual))
-    checks.append(_validity_check(extracted, today))
+    checks.append(_validity_check(extracted, today, require_adult, document_type))
     if applicant.issuing_country:
         checks.append(_country_check(applicant.issuing_country, extracted))
 
@@ -301,28 +308,42 @@ def _document_type_check(
     )
 
 
-def _validity_check(extracted: ExtractedFields, today: date) -> CheckResult:
+def _validity_check(
+    extracted: ExtractedFields,
+    today: date,
+    require_adult: bool = True,
+    document_type: DocumentType | None = None,
+) -> CheckResult:
     reasons, warnings = [], []
     age = None
+    # A birth certificate does not expire, so a missing expiry date is not worth
+    # reporting on one. On documents that should carry one, it is.
+    expires = document_type != DocumentType.birth_certificate
     if extracted.expiry_date is None:
-        # Some documents (older Rwandan IDs, for one) have no expiry date.
-        warnings.append("EXPIRY_DATE_NOT_FOUND")
+        if expires:
+            # Some documents have no expiry date either: older Rwandan IDs.
+            warnings.append("EXPIRY_DATE_NOT_FOUND")
     elif extracted.expiry_date < today:
         reasons.append("DOCUMENT_EXPIRED")
 
     dob = extracted.date_of_birth
-    if dob is None:
-        warnings.append("AGE_NOT_VERIFIED")
-    else:
+    if dob is not None:
         age = today.year - dob.year - ((today.month, today.day) < (dob.month, dob.day))
-        if age < rules.MIN_AGE_YEARS:
-            reasons.append("UNDERAGE")
+
+    if not require_adult:
+        # A child's check. Age is still read and reported, it just cannot fail.
+        warnings.append("AGE_CHECK_NOT_REQUIRED")
+    elif dob is None:
+        warnings.append("AGE_NOT_VERIFIED")
+    elif age < rules.MIN_AGE_YEARS:
+        reasons.append("UNDERAGE")
+
     return CheckResult(
         name="validity",
         status=CheckStatus.failed if reasons else CheckStatus.passed,
         reasons=reasons,
         warnings=warnings,
-        details={"expiry_date": extracted.expiry_date, "age": age},
+        details={"expiry_date": extracted.expiry_date, "age": age, "adult_required": require_adult},
     )
 
 

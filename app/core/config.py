@@ -25,6 +25,11 @@ class Settings(BaseSettings):
     # How long a scanned document stays available for the face step (in memory).
     SESSION_TTL_MINUTES: int = 30
 
+    # Where the portrait and the liveness clip are kept. Empty means nothing is
+    # written: the evidence is received and accounted for, and storage is turned
+    # on by pointing this at a folder. See app/storage/evidence.py.
+    EVIDENCE_DIR: str = ""
+
     # Set to a folder to keep the frames of each face check, for tuning thresholds.
     # Off by default: these are photos of people's faces.
     DEBUG_FRAMES_DIR: str = ""

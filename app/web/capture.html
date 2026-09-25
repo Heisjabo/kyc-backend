@@ -1,0 +1,465 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>KYC test: capture document</title>
+<link rel="stylesheet" href="/static/style.css">
+<style>
+/* The camera shows the WHOLE frame (object-fit: contain), so nothing is hidden
+   off the edges. The guide is a card-shaped rectangle drawn on top of it, and
+   the capture is exactly that rectangle mapped back into camera pixels, plus a
+   small margin so the document's own edges are never clipped. */
+.guide { position: relative; width: 100%; max-width: 680px; margin: 0 auto; aspect-ratio: 4 / 3;
+         background: #000; border-radius: 14px; overflow: hidden; }
+.guide video, .guide canvas { width: 100%; height: 100%; object-fit: contain; display: block; }
+.guide .box { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+              width: 84%; aspect-ratio: 1.586; border: 3px solid rgba(255,255,255,.8); border-radius: 10px;
+              box-shadow: 0 0 0 100vmax rgba(0,0,0,.35); transition: border-color .2s; pointer-events: none; }
+.guide .box.ready { border-color: #35d07f; }
+.guide .box.reading { border-color: #f5a623; }
+.guide .instruction { position: absolute; left: 0; right: 0; bottom: 0; padding: 10px 14px; text-align: center;
+                      background: rgba(8,10,16,.72); color: #fff; font-size: 15px; }
+.guide .countdown { position: absolute; top: 10px; right: 14px; color: #35d07f; font-weight: 700; font-size: 15px; }
+.readings { font-variant-numeric: tabular-nums; }
+#setup button { justify-self: start; }
+.controls { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 12px; }
+.photos img { max-width: 320px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Document capture</h1>
+  <p class="lead" id="lead">Hold your document inside the frame. The photo is taken by itself once the document has been read, or press Capture now.</p>
+
+  <section id="stage-setup">
+    <form id="setup" onsubmit="return false">
+      <div class="row">
+        <label>Document type
+          <select id="document-type">
+            <option value="id_card">National ID</option>
+            <option value="driving_license">Driving licence</option>
+            <option value="passport">Passport</option>
+            <option value="birth_certificate">Birth certificate (for children)</option>
+          </select>
+        </label>
+        <label>Camera
+          <select id="camera-choice">
+            <option value="environment">Back camera (phone)</option>
+            <option value="user">Front camera (laptop)</option>
+          </select>
+        </label>
+      </div>
+      <div class="row">
+        <label>First name <input type="text" id="first-name" placeholder="Jean" required></label>
+        <label>Last name <input type="text" id="last-name" placeholder="Mugisha" required></label>
+      </div>
+      <div class="row">
+        <label>Date of birth <input type="date" id="date-of-birth" required></label>
+        <label>Issuing country <input type="text" id="issuing-country" placeholder="RW, RWA or Rwanda" required></label>
+      </div>
+      <p class="lead" id="kind-note">Every detail is checked against the document, so all of them are needed.</p>
+      <button id="start">Start camera</button>
+    </form>
+  </section>
+
+  <section id="stage-capture" hidden>
+    <div class="guide" id="guide">
+      <video id="video" autoplay playsinline muted></video>
+      <canvas id="freeze" hidden></canvas>
+      <div class="box" id="box"></div>
+      <div class="countdown" id="countdown"></div>
+      <div class="instruction" id="instruction">Starting the camera...</div>
+    </div>
+    <div id="readings" class="readings"></div>
+    <div class="controls">
+      <button id="shoot">Capture now</button>
+      <button id="skip-back" class="secondary" hidden>Skip the back</button>
+      <button id="stop" class="secondary">Stop</button>
+    </div>
+    <p class="lead">Camera trouble? <a href="/">Upload a photo instead</a>.</p>
+  </section>
+
+  <section id="stage-result" hidden>
+    <div id="verdict" class="verdict"></div>
+    <div class="stage">
+      <div class="photos">
+        <figure><img id="shot" alt=""><figcaption>What was sent</figcaption></figure>
+        <figure><img id="portrait" alt="" hidden><figcaption>Portrait found on it</figcaption></figure>
+      </div>
+      <aside>
+        <h2>Read from the document</h2>
+        <dl id="fields"></dl>
+      </aside>
+    </div>
+    <div class="controls">
+      <a id="next" class="button" href="#" hidden>Continue to face check</a>
+      <button id="again">Take another photo</button>
+    </div>
+    <details><summary>Full response</summary><pre id="json"></pre></details>
+  </section>
+
+  <div id="status" class="status"></div>
+</main>
+
+<script>
+const READY_FRAMES = 3;          // consecutive good frames before we take it ourselves
+const PROBE_INTERVAL_MS = 350;   // about three frames a second
+const GIVE_UP_AFTER = 6;         // reading attempts before we offer the manual button instead
+
+const el = id => document.getElementById(id);
+const video = el('video'), freeze = el('freeze'), box = el('box');
+const instruction = el('instruction'), readings = el('readings'), status = el('status');
+const countdown = el('countdown');
+
+let stream = null, probing = null, goodFrames = 0, busy = false, attempts = 0;
+let side = 'front', frontShot = null, frontResult = null;
+
+// What each hint means to a person holding a card. The server names the fault;
+// the wording lives here, where it can be translated without touching the rules.
+const SAY = {
+  NO_DOCUMENT_IN_VIEW: 'Hold your document inside the frame',
+  DOCUMENT_NOT_DETECTED: 'Cannot read it yet, hold steady and fill the frame',
+  IMAGE_BLURRY: 'Too blurry, hold still',
+  IMAGE_LOW_RESOLUTION: 'Move the document closer',
+  IMAGE_TOO_DARK: 'Too dark, find better light',
+  IMAGE_GLARE: 'Reflection on the document, tilt it slightly',
+  COUNTRY_NOT_DETECTED: 'Cannot read the top of the document, fill the frame',
+  MRZ_NOT_READABLE: 'Cannot read the code strip, hold steady',
+  TURN_THE_CARD_UPRIGHT: 'Turn the document so the writing is upright',
+  FIT_THE_CARD_IN_THE_BOX: 'Move the document closer, fill the frame',
+  PORTRAIT_NOT_VISIBLE: 'The photo on the document must be visible',
+  TOO_DARK: 'Too dark, find better light',
+  TOO_BRIGHT: 'Too bright, move out of direct light',
+  GLARE_ON_THE_CARD: 'Reflection on the document, tilt it slightly',
+  HOLD_STILL: 'Hold still',
+  FRAME_UNREADABLE: 'Camera problem, try again',
+  APPLICANT_NAME_REQUIRED: 'no name was given to check against',
+  DOCUMENT_EXPIRED: 'the document has expired',
+  UNDERAGE: 'the holder is under 18',
+  DOCUMENT_PHOTO_SMALL: 'the portrait on the document is small, matching will be less certain',
+  DOCUMENT_TYPE_NOT_CONFIRMED: 'the document does not name its own type in words we recognise',
+  AGE_NOT_VERIFIED: 'no date of birth was read, so age was not checked',
+  MRZ_VISUAL_MISMATCH: 'the code strip disagrees with the printed text',
+  NO_ANSWER_FROM_SERVICE: 'the service did not answer',
+};
+
+function show(stage) {
+  for (const id of ['stage-setup', 'stage-capture', 'stage-result']) el(id).hidden = id !== stage;
+}
+
+/** The part of the camera frame the guide rectangle is drawn over, as a JPEG.
+ *
+ * The rectangle's position on screen is measured rather than recalculated, so
+ * what is sent is exactly what the person lined the document up inside. The
+ * video is shown with object-fit: contain, so the whole frame is visible and the
+ * only mapping needed is the letterbox offset. A margin is added on every side
+ * because people line the card up *to* the rectangle, and a document whose own
+ * edges are shaved off cannot be read.
+ */
+function cropToGuide(quality, marginRatio = 0.06) {
+  const vw = video.videoWidth, vh = video.videoHeight;
+  if (!vw || !vh) return null;
+
+  const view = video.getBoundingClientRect();
+  const rect = box.getBoundingClientRect();
+
+  // object-fit: contain letterboxes the frame inside the element.
+  const scale = Math.min(view.width / vw, view.height / vh);
+  const shownWidth = vw * scale, shownHeight = vh * scale;
+  const padX = (view.width - shownWidth) / 2, padY = (view.height - shownHeight) / 2;
+
+  // The rectangle, in camera pixels.
+  let left = (rect.left - view.left - padX) / scale;
+  let top = (rect.top - view.top - padY) / scale;
+  let width = rect.width / scale;
+  let height = rect.height / scale;
+
+  const marginX = width * marginRatio, marginY = height * marginRatio;
+  left = Math.max(0, left - marginX);
+  top = Math.max(0, top - marginY);
+  width = Math.min(vw - left, width + 2 * marginX);
+  height = Math.min(vh - top, height + 2 * marginY);
+
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.round(width);
+  canvas.height = Math.round(height);
+  canvas.getContext('2d').drawImage(video, left, top, width, height, 0, 0, canvas.width, canvas.height);
+  return new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', quality));
+}
+
+/** Send what we have to the service and return its answer, or null.
+ *
+ * A child's certificate goes to its own endpoint, which requires the details and
+ * does not apply the age rule. An adult's document goes to /scan with its type.
+ * The back is sent with the front when we have it, so the service judges the
+ * document as a whole rather than one side at a time.
+ */
+async function readDocument(front, back) {
+  const body = new FormData();
+  body.append('front', front, 'front.jpg');
+  if (back) body.append('back', back, 'back.jpg');
+  body.append('first_name', el('first-name').value.trim());
+  body.append('last_name', el('last-name').value.trim());
+  body.append('date_of_birth', el('date-of-birth').value);
+  body.append('issuing_country', el('issuing-country').value.trim());
+
+  let url = '/v1/document/birth-certificate';
+  if (!isChild()) {
+    url = '/v1/document/scan';
+    body.append('document_type', el('document-type').value);
+  }
+  const response = await fetch(url, { method: 'POST', body });
+  return response.ok ? await response.json() : null;
+}
+
+// A birth certificate means a child, which decides both the document endpoint
+// and, later, the face endpoint: there is no photograph to match against.
+function isChild() { return el('document-type').value === 'birth_certificate'; }
+
+/** Everything the service will check has to be filled in first. */
+function missingDetails() {
+  const required = {
+    'first-name': 'first name', 'last-name': 'last name',
+    'date-of-birth': 'date of birth', 'issuing-country': 'issuing country',
+  };
+  return Object.entries(required).filter(([id]) => !el(id).value.trim()).map(([, label]) => label);
+}
+
+/** Was the document actually read, or only photographed? */
+function wasRead(result) {
+  if (!result) return false;
+  const failed = (result.reasons || []);
+  // The reasons that mean "this frame could not be read", as opposed to the
+  // ones that mean "it was read and something about it is wrong", such as an
+  // expired document or a name that does not match. Only the first kind is
+  // worth holding the camera open for.
+  const unreadable = ['DOCUMENT_NOT_DETECTED', 'IMAGE_UNREADABLE', 'IMAGE_BLURRY',
+                      'IMAGE_LOW_RESOLUTION', 'IMAGE_TOO_DARK', 'IMAGE_GLARE',
+                      'MRZ_NOT_READABLE', 'COUNTRY_NOT_DETECTED'];
+  return !failed.some(reason => unreadable.includes(reason));
+}
+
+async function probe() {
+  if (busy) return;
+  busy = true;
+  try {
+    const blob = await cropToGuide(0.7);    // lighter frames for the live check
+    if (!blob) return;
+    const body = new FormData();
+    body.append('frame', blob, 'frame.jpg');
+    body.append('side', side);
+    const response = await fetch('/v1/document/frame', { method: 'POST', body });
+    if (!response.ok) return;
+    const answer = await response.json();
+
+    readings.textContent =
+      `${side} · text ${answer.text_lines ?? '-'} · portrait ${answer.portrait_ratio ?? '-'} · ` +
+      `sharp ${answer.blur_score ?? '-'} · light ${answer.brightness ?? '-'} · glare ${answer.glare_ratio ?? '-'}`;
+
+    if (!answer.usable) {
+      goodFrames = 0;
+      box.classList.remove('ready');
+      countdown.textContent = '';
+      instruction.textContent = SAY[answer.hints[0]] || answer.hints[0] || askFor();
+      return;
+    }
+
+    goodFrames += 1;
+    box.classList.add('ready');
+    countdown.textContent = '●'.repeat(Math.min(goodFrames, READY_FRAMES));
+    instruction.textContent = 'Hold it there';
+    if (goodFrames >= READY_FRAMES) await accept();
+  } catch (error) {
+    status.textContent = error.message;
+  } finally {
+    busy = false;
+  }
+}
+
+function askFor() {
+  return side === 'front'
+    ? 'Hold your document inside the frame'
+    : 'Now the back of the document, inside the frame';
+}
+
+/** A frame passed the live checks. What happens next depends on the side.
+ *
+ * On the front, nothing is kept until the service has actually read the
+ * document: being told to try again *after* the photo was taken is the whole
+ * problem this avoids. Once the front is read, the back is captured on its own
+ * checks, and both are sent together for the verdict.
+ */
+async function accept() {
+  const blob = await cropToGuide(0.95);
+  if (!blob) return;
+
+  if (side === 'back') {
+    stopCamera();
+    await finish(frontShot, blob);
+    return;
+  }
+
+  attempts += 1;
+  box.classList.add('reading');
+  instruction.textContent = 'Reading the document, hold still...';
+  let result = null;
+  try {
+    result = await readDocument(blob, null);
+  } catch (error) {
+    status.textContent = error.message;
+  }
+  box.classList.remove('reading');
+
+  if (!wasRead(result)) {
+    goodFrames = 0;
+    countdown.textContent = '';
+    const why = (result && (result.reasons || [])[0]) || '';
+    instruction.textContent = attempts >= GIVE_UP_AFTER
+      ? 'Still cannot read it. Press Capture now to send it anyway.'
+      : (SAY[why] || 'Cannot read it yet, hold steady in better light');
+    return;
+  }
+
+  // The front is readable. Keep it, and ask for the back.
+  frontShot = blob;
+  frontResult = result;
+  el('shot').src = URL.createObjectURL(blob);
+  side = 'back';
+  goodFrames = 0;
+  attempts = 0;
+  countdown.textContent = '';
+  el('skip-back').hidden = false;
+  instruction.textContent = 'Front captured. Now turn it over and show the back.';
+}
+
+/** Send both sides for the verdict, or the front alone if the back was skipped. */
+async function finish(front, back) {
+  stopCamera();
+  instruction.textContent = 'Reading...';
+  status.textContent = 'Reading the document...';
+  let result = null;
+  try {
+    result = await readDocument(front, back);
+  } catch (error) {
+    status.textContent = error.message;
+  }
+  render(result || frontResult || { decision: 'retake', reasons: ['NO_ANSWER_FROM_SERVICE'] });
+}
+
+/** The manual button: send what is in the frame now and show the answer,
+ *  whatever it is. For when the guidance is wrong or somebody is in a hurry. */
+async function captureNow() {
+  clearInterval(probing);
+  probing = null;
+  instruction.textContent = 'Reading the document...';
+  const blob = await cropToGuide(0.95);
+  if (!blob) { status.textContent = 'Could not read the camera'; return; }
+  if (side === 'back') { await finish(frontShot, blob); return; }
+  el('shot').src = URL.createObjectURL(blob);
+  await finish(blob, null);
+}
+
+function render(result) {
+  show('stage-result');
+  status.textContent = '';
+  el('json').textContent = JSON.stringify(result, null, 2);
+
+  const decision = result.decision;
+  const reasons = result.reasons || [];
+  const verdict = el('verdict');
+  verdict.className = 'verdict ' + (decision === 'pass' ? 'ok' : decision === 'review' ? 'warn' : 'bad');
+  verdict.textContent =
+      decision === 'pass'   ? 'Document read and accepted'
+    : decision === 'review' ? 'Document read. Needs a second look: ' + reasons.map(say).join(', ')
+    :                         'Could not use this photo: ' + reasons.map(say).join(', ');
+
+  // The service returns the fields under "extracted", with the source it read
+  // them from ("mrz" or "visual"). Empty values are left out rather than shown
+  // as blanks, so what is on screen is what was genuinely read.
+  const extracted = result.extracted || {};
+  const LABELS = {
+    source: 'read from', document_type_code: 'document code', document_number: 'document number',
+    issuing_country: 'issuing country', nationality: 'nationality', surname: 'surname',
+    given_names: 'given names', full_name: 'full name', date_of_birth: 'date of birth',
+    issue_date: 'issued', expiry_date: 'expires', sex: 'sex',
+  };
+  const fields = el('fields');
+  fields.innerHTML = '';
+  let shown = 0;
+  for (const [key, value] of Object.entries(extracted)) {
+    if (value === null || value === undefined || value === '') continue;
+    fields.insertAdjacentHTML('beforeend', `<dt>${LABELS[key] || key.replace(/_/g, ' ')}</dt><dd>${value}</dd>`);
+    shown += 1;
+  }
+  if (result.portrait) {
+    fields.insertAdjacentHTML('beforeend', `<dt>portrait on document</dt><dd>${result.portrait}</dd>`);
+    shown += 1;
+  }
+  if (!shown) {
+    fields.innerHTML = '<dt>nothing could be read</dt><dd>try again in better light, filling the frame</dd>';
+  }
+
+  if ((result.warnings || []).length) {
+    fields.insertAdjacentHTML('beforeend', `<dt>notes</dt><dd>${result.warnings.map(say).join(', ')}</dd>`);
+  }
+
+  const next = el('next');
+  next.hidden = !result.face_verification_url;
+  if (result.face_verification_url) next.href = result.face_verification_url;
+}
+
+/** Reason and warning codes in plain words. */
+function say(code) {
+  return SAY[code] || code.toLowerCase().replace(/_/g, ' ');
+}
+
+async function startCamera() {
+  const missing = missingDetails();
+  if (missing.length) {
+    status.textContent = 'Please fill in: ' + missing.join(', ') + '. Each one is checked against the document.';
+    return;
+  }
+  status.textContent = '';
+
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: el('camera-choice').value, width: { ideal: 1920 }, height: { ideal: 1080 } },
+      audio: false,
+    });
+  } catch (error) {
+    status.textContent = 'Camera refused: ' + error.message;
+    return;
+  }
+  video.srcObject = stream;
+  show('stage-capture');
+  side = 'front';
+  frontShot = frontResult = null;
+  goodFrames = 0;
+  attempts = 0;
+  el('skip-back').hidden = true;
+  instruction.textContent = askFor();
+  probing = setInterval(probe, PROBE_INTERVAL_MS);
+}
+
+function stopCamera() {
+  if (probing) { clearInterval(probing); probing = null; }
+  if (stream) { stream.getTracks().forEach(track => track.stop()); stream = null; }
+}
+
+el('start').addEventListener('click', startCamera);
+el('shoot').addEventListener('click', captureNow);    // always available, whatever the guidance says
+el('stop').addEventListener('click', () => { stopCamera(); show('stage-setup'); });
+el('again').addEventListener('click', () => { show('stage-setup'); });
+el('skip-back').addEventListener('click', () => { clearInterval(probing); probing = null; finish(frontShot, null); });
+
+// A child verifies with a birth certificate, which has no type to choose.
+el('document-type').addEventListener('change', () => {
+  el('kind-note').textContent = isChild()
+    ? "A birth certificate is a child's document: the details are checked against it, the 18 or over rule does not apply, and the face step proves a live person rather than matching a photograph."
+    : 'Every detail is checked against the document, so all of them are needed.';
+});
+window.addEventListener('pagehide', stopCamera);
+</script>
+</body>
+</html>

@@ -232,3 +232,76 @@ def test_a_stranger_fails_with_the_score_reported():
     assert result.check.status == "fail"
     assert result.check.reasons == ["FACE_MISMATCH"]
     assert result.score < LINE
+
+
+# The portrait: identity is decided on one photograph, not on the frames
+
+def test_identity_is_decided_on_the_portrait_when_one_is_sent(monkeypatch, session_with_document):
+    """The frames prove liveness. The portrait proves who it was, the way the
+    providers do it: one passport-style photograph against another."""
+    stub_capture(monkeypatch, PASSES + 0.08)
+    files = [("frames", (f"f{i}.jpg", frame_bytes(seed=i), "image/jpeg")) for i in range(14)]
+    files.append(("portrait", ("portrait.jpg", frame_bytes(seed=99), "image/jpeg")))
+    response = client.post(
+        f"/v1/verifications/{session_with_document.id}/face", files=files, data={"challenge": "full"}
+    )
+    body = response.json()
+    assert response.status_code == 200
+    assert body["match"]["frames_compared"] == 1
+    assert body["match"]["check"]["details"]["portrait_source"] == "portrait"
+
+
+def test_without_a_portrait_the_best_frontal_frame_stands_in(monkeypatch, session_with_document):
+    """An API caller that only has frames still gets an answer."""
+    stub_capture(monkeypatch, PASSES + 0.08)
+    body = post_frames(session_with_document.id, 14).json()
+    assert body["match"]["check"]["details"]["portrait_source"] == "frame"
+
+
+def test_the_challenge_clip_is_accepted_and_accounted_for(monkeypatch, session_with_document):
+    """Storage is not built yet. The clip is still received, checked and handed
+    to the storage seam, so switching storage on changes nothing else."""
+    stub_capture(monkeypatch, PASSES + 0.08)
+    kept = {}
+    monkeypatch.setattr(
+        verifications_route.evidence, "keep_challenge_video",
+        lambda verification_id, data, content_type: kept.update(size=len(data), type=content_type),
+    )
+    files = [("frames", (f"f{i}.jpg", frame_bytes(seed=i), "image/jpeg")) for i in range(14)]
+    files.append(("video", ("challenge.webm", b"\x1a\x45\xdf\xa3fake-clip", "video/webm")))
+    response = client.post(
+        f"/v1/verifications/{session_with_document.id}/face", files=files, data={"challenge": "full"}
+    )
+    assert response.status_code == 200
+    assert kept["type"] == "video/webm" and kept["size"] > 0
+
+
+def test_a_clip_that_is_not_video_is_refused(monkeypatch, session_with_document):
+    stub_capture(monkeypatch, PASSES + 0.08)
+    files = [("frames", (f"f{i}.jpg", frame_bytes(seed=i), "image/jpeg")) for i in range(14)]
+    files.append(("video", ("clip.exe", b"MZ", "application/octet-stream")))
+    response = client.post(
+        f"/v1/verifications/{session_with_document.id}/face", files=files, data={"challenge": "full"}
+    )
+    assert response.status_code == 415
+
+
+# A child's face step: liveness only
+
+def test_a_childs_face_step_proves_liveness_and_never_matches(monkeypatch, session_with_document):
+    stub_capture(monkeypatch, FAILS - 0.3)      # a score that would fail a match
+    files = [("frames", (f"f{i}.jpg", frame_bytes(seed=i), "image/jpeg")) for i in range(14)]
+    files.append(("portrait", ("portrait.jpg", frame_bytes(seed=99), "image/jpeg")))
+    response = client.post(
+        f"/v1/verifications/{session_with_document.id}/child-face", files=files, data={"challenge": "full"}
+    )
+    body = response.json()
+    assert response.status_code == 200
+    assert "match" not in body                  # nothing that could be read as a comparison
+    assert body["decision"] == "pass"           # the liveness was good, so the check passes
+    assert body["portrait_kept"] is True
+
+
+def test_the_child_face_endpoint_is_in_the_api_schema():
+    schema = client.get("/openapi.json").json()
+    assert "/v1/verifications/{verification_id}/child-face" in schema["paths"]
