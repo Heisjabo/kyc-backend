@@ -81,6 +81,71 @@ new enum is written by hand the way the first migration does it.
 pytest
 ```
 
+## Accounts and API keys
+
+A customer of this service holds an **account**. An account owns **API keys**,
+and a key is what a system presents when it calls the API. Neither is the same
+thing as a `user`, which is a person being verified and who never signs in.
+
+Registration asks for what `tuesday-backend`'s signup asks for, minus its trading
+fields (role, amount, stock), its entity representatives, ethnicity, occupation
+and recovery email:
+
+| required | optional |
+|---|---|
+| email, password, first name, last name, phone, country code, date of birth, country | gender, city, address |
+
+| | |
+|---|---|
+| `POST /v1/auth/register` | open an account, signed in straight away |
+| `POST /v1/auth/login` | session token for the dashboard |
+| `GET /v1/auth/me` | who the session belongs to |
+| `POST /v1/auth/forgot-password` | start a reset |
+| `POST /v1/auth/reset-password` | set a new password with the token |
+| `POST /v1/api-keys` | make a key. The key is returned **once** |
+| `GET /v1/api-keys` | list keys, without their secrets |
+| `DELETE /v1/api-keys/{id}` | revoke a key. The row stays |
+
+**How the three secrets are handled**, since they are not the same kind of thing:
+
+- **Passwords** are 8 to 16 characters with no required mixture of character
+  classes, the same rule `tuesday-backend` applies, so a person meets one rule
+  across Tuesday rather than a different one per service. They are hashed with
+  Argon2id, and the stored hash is upgraded quietly at sign-in if the parameters
+  move on. (tuesday-backend uses bcrypt at cost 10; that is about how the hash is
+  stored, not what a person has to type.)
+- **API keys** are 32 random bytes generated here, so a slow hash would buy
+  nothing and cost a hash on every request. SHA-256, compared in constant time.
+  Stored as a prefix, which is how a presented key is found, plus the hash. A
+  copy of the table is not a set of working credentials.
+- **Session tokens** are signed rather than stored: a JWT, checked against
+  `JWT_SECRET`. The service refuses to start outside development if that is
+  still the published default or shorter than 32 characters.
+
+**Two deliberate refusals to be helpful.** A failed sign-in says only that the
+email or password was wrong, never which, and the password is verified even when
+no such account exists so that both take the same time. A password reset gives
+the same answer whether or not the address is known: confirming which addresses
+have accounts hands over a list worth stealing.
+
+**Keys expire.** The default is 90 days and the ceiling is a year. A key with no
+end date is a key nobody ever rotates, and the one that leaks is always the
+oldest. Revoked and expired keys are kept, so what they did does not disappear
+with them, and every call stamps `last_used_at` so a key nobody uses can be
+found and removed.
+
+### Not done yet
+
+- **Email.** `app/services/email.py` records what it would have sent and sends
+  nothing. Everything around it is real: the token is generated, hashed, stored
+  with an expiry and spent once. While email is off and `ENVIRONMENT` is
+  `development`, `forgot-password` hands the token back in the response so the
+  flow can be tested; anywhere else that is refused.
+- **Verifications are not yet tied to an account.** `account_from_api_key` is
+  built and tested, but the verification endpoints are still open, so the test
+  pages keep working. Attaching the guard and recording which account a
+  verification belongs to is the next piece.
+
 ## Document check
 
 `POST /v1/document/scan` (multipart form)
