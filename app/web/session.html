@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Identity verification</title>
+<link rel="stylesheet" href="/static/style.css">
+<style>
+.steps { display: grid; gap: 10px; margin: 18px 0; }
+.step { display: flex; align-items: center; gap: 12px; padding: 12px 14px; border: 1px solid var(--line);
+        border-radius: 12px; background: var(--panel); }
+.step .mark { width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center;
+              font-size: 13px; font-weight: 700; background: #2a3242; color: #9aa4b6; flex: none; }
+.step.done .mark { background: #35d07f; color: #06240f; }
+.step.now { border-color: #35d07f; }
+.step .what { flex: 1; }
+.step .what small { display: block; color: var(--muted); font-size: 12px; margin-top: 2px; }
+.qr { display: grid; justify-items: center; gap: 8px; padding: 16px; border: 1px solid var(--line);
+      border-radius: 12px; background: var(--panel); margin-top: 16px; }
+.qr img { background: #fff; padding: 10px; border-radius: 10px; }
+.qr p { margin: 0; color: var(--muted); font-size: 13px; text-align: center; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Identity verification</h1>
+  <p class="lead" id="lead">Checking your session...</p>
+
+  <div class="steps" id="steps"></div>
+
+  <div class="controls">
+    <a id="go" class="button" href="#" hidden>Start</a>
+  </div>
+
+  <div class="qr" id="qr" hidden>
+    <img id="qr-image" alt="Scan to continue on your phone" width="180" height="180">
+    <p>Prefer your phone's camera? Scan this and carry on there.<br>
+       Finish on either device, it is the same session.</p>
+  </div>
+
+  <div id="status" class="status"></div>
+</main>
+
+<script>
+const token = location.pathname.split('/')[2];
+const WORDING = {
+  document: ['Your document', 'A passport, national ID or driving licence'],
+  face: ['Your face', 'A short check that you are really here'],
+  address: ['Your address', 'A bill or statement showing where you live'],
+  due_diligence: ['A few questions', 'Asked by the company checking you'],
+  aml: ['Background check', 'Run by us, nothing for you to do'],
+  consent: ['Your consent', 'Confirming you agree to be checked'],
+};
+const PAGE = {
+  document: `/verify/${token}/document`,
+  face: `/verify/${token}/face`,
+};
+
+async function load() {
+  let session;
+  try {
+    const response = await fetch(`/v1/sessions/${token}`);
+    if (!response.ok) {
+      document.getElementById('lead').textContent =
+        response.status === 404 ? 'This link is not valid.' : 'This link cannot be opened.';
+      return;
+    }
+    session = await response.json();
+  } catch (error) {
+    document.getElementById('status').textContent = error.message;
+    return;
+  }
+
+  const steps = document.getElementById('steps');
+  steps.innerHTML = '';
+  for (const name of session.services) {
+    const done = session.completed_steps.includes(name);
+    const now = session.next_step === name;
+    const [title, detail] = WORDING[name] || [name, ''];
+    steps.insertAdjacentHTML('beforeend', `
+      <div class="step ${done ? 'done' : ''} ${now ? 'now' : ''}">
+        <div class="mark">${done ? '✓' : ''}</div>
+        <div class="what"><strong>${title}</strong><small>${detail}</small></div>
+      </div>`);
+  }
+
+  const lead = document.getElementById('lead');
+  const go = document.getElementById('go');
+  const qr = document.getElementById('qr');
+
+  if (session.expired) {
+    lead.textContent = 'This link has expired. Ask for a new one.';
+    return;
+  }
+  if (!session.next_step) {
+    lead.textContent = 'All done. Thank you.';
+    if (session.redirect_url) {
+      go.hidden = false;
+      go.href = session.redirect_url;
+      go.textContent = 'Back to where you came from';
+    }
+    return;
+  }
+
+  const [title] = WORDING[session.next_step] || [session.next_step];
+  lead.textContent = `Next: ${title.toLowerCase()}.`;
+  go.hidden = false;
+  go.href = PAGE[session.next_step] || '#';
+  go.textContent = session.completed_steps.length ? 'Continue' : 'Start';
+
+  // The QR is the same link. Both devices read one session, so whichever
+  // finishes a step, the other sees it on its next look.
+  if (session.next_step === 'document') {
+    qr.hidden = false;
+    document.getElementById('qr-image').src =
+      'https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=' + encodeURIComponent(location.href);
+  }
+}
+
+load();
+// The desktop watches while the phone works.
+setInterval(load, 4000);
+</script>
+</body>
+</html>

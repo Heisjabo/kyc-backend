@@ -103,6 +103,20 @@ def _load():
     return _models
 
 
+def find_face(image: np.ndarray):
+    """The largest face SCRFD sees, as (box, landmarks), or None.
+
+    The same detector the match uses, so anything decided from it agrees with
+    what the comparison will actually be able to do.
+    """
+    with _lock:
+        detector, _ = _load()
+        boxes, landmarks = detector.detect(image, max_num=1, metric="max")
+    if boxes.shape[0] == 0 or landmarks is None or landmarks.shape[0] == 0:
+        return None
+    return boxes[0], landmarks[0]
+
+
 def embed(image: np.ndarray) -> np.ndarray | None:
     """The 512-number vector for the largest face in the image, or None."""
     with _lock:

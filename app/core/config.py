@@ -22,13 +22,19 @@ class Settings(BaseSettings):
     # onnxruntime-gpu installed in place of onnxruntime.
     FACE_MODEL_DEVICE_ID: int = -1
 
-    # How long a scanned document stays available for the face step (in memory).
-    SESSION_TTL_MINUTES: int = 30
+    # How long a verification link works for, in minutes. Shufti's default is
+    # 60 and a client can override it per request with ttl.
+    SESSION_TTL_MINUTES: int = 60
+    # The longest a client may ask for: 30 days. A link that lives for weeks is
+    # a link that can be forwarded, so this is a ceiling rather than an
+    # encouragement, and it is a setting so it can be lowered without a release.
+    MAX_SESSION_TTL_MINUTES: int = 60 * 24 * 30
 
-    # Where the portrait and the liveness clip are kept. Empty means nothing is
-    # written: the evidence is received and accounted for, and storage is turned
-    # on by pointing this at a folder. See app/storage/evidence.py.
-    EVIDENCE_DIR: str = ""
+    # Where the images and clips a verification produces are written. A folder
+    # while this runs on one machine; a bucket later, which changes
+    # app/storage/evidence.py and nothing else. Never served directly: files are
+    # read back through the API by a caller holding a key.
+    EVIDENCE_DIR: str = "var/evidence"
 
     # Set to a folder to keep the frames of each face check, for tuning thresholds.
     # Off by default: these are photos of people's faces.

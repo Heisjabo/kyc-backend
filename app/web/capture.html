@@ -25,6 +25,9 @@
 #setup button { justify-self: start; }
 .controls { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 12px; }
 .photos img { max-width: 320px; }
+/* .row sets display: grid, and a class rule beats the hidden attribute, so a
+   hidden row has to be told twice. The same trap as .spinner in style.css. */
+.row[hidden] { display: none; }
 </style>
 </head>
 <body>
@@ -50,11 +53,13 @@
           </select>
         </label>
       </div>
-      <div class="row">
+      <!-- Only for the standalone flow. In a session these were given by the
+           client when they opened it, and are not asked for again. -->
+      <div class="row asked-here">
         <label>First name <input type="text" id="first-name" placeholder="Jean" required></label>
         <label>Last name <input type="text" id="last-name" placeholder="Mugisha" required></label>
       </div>
-      <div class="row">
+      <div class="row asked-here">
         <label>Date of birth <input type="date" id="date-of-birth" required></label>
         <label>Issuing country <input type="text" id="issuing-country" placeholder="RW, RWA or Rwanda" required></label>
       </div>
@@ -108,6 +113,10 @@ const PROBE_INTERVAL_MS = 350;   // about three frames a second
 const GIVE_UP_AFTER = 6;         // reading attempts before we offer the manual button instead
 
 const el = id => document.getElementById(id);
+// Set when this page is part of a verification session, in which case the
+// details were given by the client at initiation and are not asked for here.
+// The token is in the path: /verify/{token}/...
+const SESSION_TOKEN = (location.pathname.match(/^\/verify\/([^/]+)/) || [])[1] || null;
 const video = el('video'), freeze = el('freeze'), box = el('box');
 const instruction = el('instruction'), readings = el('readings'), status = el('status');
 const countdown = el('countdown');
@@ -199,6 +208,16 @@ async function readDocument(front, back) {
   const body = new FormData();
   body.append('front', front, 'front.jpg');
   if (back) body.append('back', back, 'back.jpg');
+
+  // Opened from a session link: the document goes to that session, and who the
+  // person is was fixed when the client opened it, so nothing typed on this
+  // page is sent with it.
+  if (SESSION_TOKEN) {
+    body.append('document_type', el('document-type').value);
+    const inSession = await fetch(`/v1/sessions/${SESSION_TOKEN}/document`, { method: 'POST', body });
+    return inSession.ok ? await inSession.json() : await inSession.json().catch(() => null);
+  }
+
   body.append('first_name', el('first-name').value.trim());
   body.append('last_name', el('last-name').value.trim());
   body.append('date_of_birth', el('date-of-birth').value);
@@ -219,6 +238,7 @@ function isChild() { return el('document-type').value === 'birth_certificate'; }
 
 /** Everything the service will check has to be filled in first. */
 function missingDetails() {
+  if (SESSION_TOKEN) return [];
   const required = {
     'first-name': 'first name', 'last-name': 'last name',
     'date-of-birth': 'date of birth', 'issuing-country': 'issuing country',
@@ -297,6 +317,21 @@ async function accept() {
   if (side === 'back') {
     stopCamera();
     await finish(frontShot, blob);
+    return;
+  }
+
+  // In a session, sending the front on its own would record an attempt, and
+  // then sending it again with the back would record a second one for a person
+  // who photographed their document once. So the front is kept and read later,
+  // with the back, in a single submission.
+  if (SESSION_TOKEN) {
+    frontShot = blob;
+    el('shot').src = URL.createObjectURL(blob);
+    side = 'back';
+    goodFrames = 0;
+    countdown.textContent = '';
+    el('skip-back').hidden = false;
+    instruction.textContent = 'Front captured. Now turn it over and show the back.';
     return;
   }
 
@@ -405,8 +440,15 @@ function render(result) {
   }
 
   const next = el('next');
-  next.hidden = !result.face_verification_url;
-  if (result.face_verification_url) next.href = result.face_verification_url;
+  if (SESSION_TOKEN) {
+    // Back to the session, which decides what comes next.
+    next.hidden = !(decision === 'pass' || decision === 'review');
+    next.href = `/verify/${SESSION_TOKEN}`;
+    next.textContent = 'Continue';
+  } else {
+    next.hidden = !result.face_verification_url;
+    if (result.face_verification_url) next.href = result.face_verification_url;
+  }
 }
 
 /** Reason and warning codes in plain words. */
@@ -454,6 +496,19 @@ el('again').addEventListener('click', () => { show('stage-setup'); });
 el('skip-back').addEventListener('click', () => { clearInterval(probing); probing = null; finish(frontShot, null); });
 
 // A child verifies with a birth certificate, which has no type to choose.
+// In a session, the only question left is which document this is.
+if (SESSION_TOKEN) {
+  for (const row of document.querySelectorAll('.asked-here')) row.hidden = true;
+  el('kind-note').textContent =
+    'Your details were given when this check was started. Choose what you are holding and take the photograph.';
+  el('lead').textContent =
+    'Hold your document inside the frame. The photo is taken by itself once it has been read.';
+  // A birth certificate is not something a person picks for themselves here.
+  for (const option of el('document-type').options) {
+    if (option.value === 'birth_certificate') option.hidden = true;
+  }
+}
+
 el('document-type').addEventListener('change', () => {
   el('kind-note').textContent = isChild()
     ? "A birth certificate is a child's document: the details are checked against it, the 18 or over rule does not apply, and the face step proves a live person rather than matching a photograph."

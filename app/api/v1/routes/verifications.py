@@ -16,7 +16,7 @@ from app.rules import document as document_rules
 from app.core.config import settings
 from app.rules import face as rules
 from app.schemas.document import CheckStatus, Decision, ExtractedFields
-from app.schemas.face import ChildFaceResponse, FaceVerificationResponse
+from app.schemas.face import FaceVerificationResponse
 from app.storage import evidence, sessions
 
 router = APIRouter(prefix="/verifications")
@@ -199,66 +199,6 @@ def _parse_steps(steps: str | None) -> dict[int, str] | None:
         return None
 
 
-# A child's face step is its own endpoint, because it answers a different
-# question. The adult endpoint asks "is this the person on the document", which a
-# birth certificate cannot answer. This asks "is a live person here", keeps the
-# portrait, and never pretends a comparison happened.
-@router.post("/{verification_id}/child-face", response_model=ChildFaceResponse)
-def verify_child_face(
-    verification_id: str,
-    frames: list[UploadFile] = File(..., description="Frames captured during the head-turn challenge, in order"),
-    portrait: UploadFile | None = File(
-        None, description="The still taken at the end, kept as the record of who was checked"
-    ),
-    video: UploadFile | None = File(
-        None, description="A few seconds of the challenge, kept as evidence of how the check went"
-    ),
-    challenge: str = Form(rules.DEFAULT_CHALLENGE),
-    steps: str | None = Form(None, description='Which frame was captured for which step'),
-) -> ChildFaceResponse:
-    """Prove a live person followed the movements, and keep their portrait.
-
-    No face matching: a birth certificate has no photograph to match against.
-    """
-    started = time.perf_counter()
-    session = sessions.get(verification_id)
-    if session is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Verification not found or expired")
-    if challenge not in rules.CHALLENGES:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, f"challenge must be one of: {', '.join(rules.CHALLENGES)}")
-    if not rules.MIN_FRAMES <= len(frames) <= rules.MAX_FRAMES:
-        raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY,
-            f"Send between {rules.MIN_FRAMES} and {rules.MAX_FRAMES} frames, got {len(frames)}",
-        )
-
-    payloads = []
-    for index, frame in enumerate(frames):
-        data = frame.file.read(document_rules.MAX_UPLOAD_BYTES + 1)
-        if len(data) > document_rules.MAX_UPLOAD_BYTES:
-            raise HTTPException(status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, f"frame {index} is larger than 10 MB")
-        payloads.append(data)
-
-    portrait_bytes = _read_optional(portrait, "portrait", document_rules.MAX_UPLOAD_BYTES)
-    _keep_evidence(verification_id, video, portrait_bytes)
-
-    liveness = check_liveness(
-        payloads, challenge_type=challenge, resting=session.resting_mesh, claims=_parse_steps(steps)
-    )
-
-    session.face_result = {"decision": liveness.decision.value, "score": None, "reasons": liveness.reasons}
-    return ChildFaceResponse(
-        verification_id=verification_id,
-        decision=liveness.decision,
-        reasons=list(dict.fromkeys(liveness.reasons)),
-        warnings=list(dict.fromkeys(liveness.warnings)),
-        liveness=liveness,
-        portrait_kept=bool(portrait_bytes),
-        document=ExtractedFields(**session.document_fields) if session.document_fields else None,
-        processing_ms=int((time.perf_counter() - started) * 1000),
-    )
-
-
 def _read_optional(upload: UploadFile | None, field: str, limit: int) -> bytes | None:
     if upload is None:
         return None
@@ -277,7 +217,7 @@ def _keep_evidence(verification_id: str, video: UploadFile | None, portrait: byt
     nothing else.
     """
     if portrait:
-        evidence.keep_portrait(verification_id, portrait)
+        evidence.keep(verification_id, portrait, "portrait")
     if video is None:
         return
     if video.content_type not in rules.ALLOWED_VIDEO_TYPES:
@@ -287,7 +227,7 @@ def _keep_evidence(verification_id: str, video: UploadFile | None, portrait: byt
         )
     data = _read_optional(video, "video", rules.MAX_VIDEO_BYTES)
     if data:
-        evidence.keep_challenge_video(verification_id, data, video.content_type)
+        evidence.keep(verification_id, data, "challenge_video", video.content_type)
 
 
 def _frontal_frame(payloads: list[bytes], liveness) -> "np.ndarray | None":

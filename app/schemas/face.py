@@ -85,26 +85,6 @@ class FaceMatchResult(BaseModel):
     check: CheckResult
 
 
-class ChildFaceResponse(BaseModel):
-    """A child's face step: liveness only.
-
-    A birth certificate carries no photograph, so there is nothing to compare a
-    face against. What this proves is that a live person sat in front of the
-    camera and followed the movements, and it keeps the portrait taken at the end
-    as the record of who that was.
-    """
-
-    verification_id: str
-    decision: Decision
-    reasons: list[str]
-    warnings: list[str]
-    liveness: LivenessResponse
-    # True once a portrait has been taken and handed to storage.
-    portrait_kept: bool
-    document: ExtractedFields | None
-    processing_ms: int
-
-
 class FaceVerificationResponse(BaseModel):
     """Liveness and face match together, against a document scanned earlier."""
 

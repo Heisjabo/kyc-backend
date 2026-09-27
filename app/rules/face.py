@@ -172,3 +172,10 @@ CALIBRATION_FRAMES = 4
 # refusing the evidence would be worse than storing a large file.
 MAX_VIDEO_BYTES = 25 * 1024 * 1024
 ALLOWED_VIDEO_TYPES = {"video/webm", "video/mp4", "video/quicktime"}
+
+
+# The duplicate face warning: how far above the match line a face has to score
+# against somebody else's portrait before it is worth telling a person about.
+# Deliberately strict, because at the match line itself this would flag siblings
+# and cousins. Not yet measured on real pairs, so it errs towards silence.
+DUPLICATE_FACE_MARGIN = 0.15

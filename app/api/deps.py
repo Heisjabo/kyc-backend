@@ -44,7 +44,7 @@ def current_account(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    account = db.get(Account, _as_uuid(claims.get("sub")))
+    account = db.get(Account, _as_id(claims.get("sub")))
     if account is None or not account.is_active:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "That account is no longer active")
     return account
@@ -98,10 +98,9 @@ def _expired(when: datetime, now: datetime) -> bool:
     return when < now
 
 
-def _as_uuid(value):
-    import uuid
-
+def _as_id(value) -> int | None:
+    """The account id out of a token's subject, or None if it is not one."""
     try:
-        return uuid.UUID(str(value))
-    except (ValueError, AttributeError, TypeError):
+        return int(value)
+    except (TypeError, ValueError):
         return None

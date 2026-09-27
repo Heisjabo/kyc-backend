@@ -382,6 +382,25 @@ def _normalize_name(value: str | None) -> list[str]:
     return [token for token in re.sub(r"[^A-Z]+", " ", ascii_value.upper()).split() if len(token) > 1]
 
 
+def names_on_document(names: list[str | None], lines: list[str]) -> tuple[list[str], list[str]]:
+    """Which of these names appear in a document's printed text, and which do not.
+
+    The same matching the name check uses: every name has to appear somewhere in
+    the text, in any order, fuzzily enough to survive OCR mangling a letter.
+    Used on a birth certificate to ask whether a verified parent is named on it.
+    """
+    wanted = [token for name in names for token in _normalize_name(name)]
+    on_document = _normalize_name(" ".join(line for line in lines if "<<" not in line))
+
+    found, missing = [], []
+    for token in wanted:
+        if any(fuzz.ratio(token, other) >= rules.NAME_TOKEN_MATCH_SCORE for other in on_document):
+            found.append(token)
+        else:
+            missing.append(token)
+    return found, missing
+
+
 def _name_check(applicant: Applicant, extracted: ExtractedFields, all_lines: list[str], use_mrz: bool) -> CheckResult:
     provided = _normalize_name(applicant.first_name) + _normalize_name(applicant.last_name)
     if use_mrz:

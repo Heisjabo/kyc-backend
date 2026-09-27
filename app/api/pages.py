@@ -21,13 +21,39 @@ def scan_page() -> HTMLResponse:
     return HTMLResponse((WEB_DIR / "scan.html").read_text())
 
 
+# The pages a person walks through, named after what they are:
+#
+#   /verify/{token}            where you are, and what is next
+#   /verify/{token}/document   photograph your document
+#   /verify/{token}/face       prove you are here
+#
+# The token is unguessable and is the whole credential, which is what lets the
+# same link be scanned onto a phone and carried on there.
+@router.get("/verify/{token}", response_class=HTMLResponse)
+def session_page(token: str) -> HTMLResponse:
+    """Where the person is in their verification, and what comes next."""
+    return HTMLResponse((WEB_DIR / "session.html").read_text())
+
+
+@router.get("/verify/{token}/document", response_class=HTMLResponse)
+def session_document_page(token: str) -> HTMLResponse:
+    """The document step of a session."""
+    return HTMLResponse((WEB_DIR / "capture.html").read_text())
+
+
+@router.get("/verify/{token}/face", response_class=HTMLResponse)
+def session_face_page(token: str) -> HTMLResponse:
+    """The face step of a session."""
+    return HTMLResponse((WEB_DIR / "verify.html").read_text())
+
+
 @router.get("/capture", response_class=HTMLResponse)
 def capture_page() -> HTMLResponse:
     """Guided document capture: the camera holds off until the card is readable."""
     return HTMLResponse((WEB_DIR / "capture.html").read_text())
 
 
-@router.get("/verify/{verification_id}", response_class=HTMLResponse)
+@router.get("/scratch-verify/{verification_id}", response_class=HTMLResponse)
 def verify_page(verification_id: str) -> HTMLResponse:
     return HTMLResponse((WEB_DIR / "verify.html").read_text())
 

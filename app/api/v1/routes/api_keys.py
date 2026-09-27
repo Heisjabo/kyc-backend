@@ -79,11 +79,15 @@ def revoke_key(
     db: Session = Depends(get_session),
 ) -> ApiKeyResponse:
     """Stop a key working. The row stays: what it did should not disappear with it."""
+    # Keys are named either by their prefix, which is what a person reads off a
+    # list, or by their id.
     key = db.scalar(
         select(ApiKey).where(ApiKey.prefix == key_id, ApiKey.account_id == account.id)
-    ) or db.scalar(
-        select(ApiKey).where(ApiKey.id == _as_uuid(key_id), ApiKey.account_id == account.id)
     )
+    if key is None and key_id.isdigit():
+        key = db.scalar(
+            select(ApiKey).where(ApiKey.id == int(key_id), ApiKey.account_id == account.id)
+        )
     if key is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "No such key on this account")
     if key.revoked_at is None:
@@ -93,10 +97,4 @@ def revoke_key(
     return ApiKeyResponse(**_as_response(key))
 
 
-def _as_uuid(value: str):
-    import uuid
 
-    try:
-        return uuid.UUID(value)
-    except ValueError:
-        return None

@@ -1,20 +1,25 @@
 """Accounts, sessions, password resets and API keys, end to end.
 
-These run against SQLite in memory rather than the real database: the tables
-here use portable types, and a test that needs Postgres running is a test nobody
-runs. The queries are the same ones production executes.
+These run against Postgres, in a throwaway schema dropped afterwards, because
+that is what production runs on: ids are BIGINT, which SQLite will not
+autoincrement, and enum and JSONB columns behave differently there too. A test
+on a different database than the one you ship is a test of something else.
+
+They skip when Postgres is not reachable rather than failing, so the rest of the
+suite still runs on a machine without it.
 """
 
+import uuid
 from datetime import UTC, datetime, timedelta
 
 import pytest
 from fastapi import Depends, FastAPI
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine, select
+from sqlalchemy import create_engine, select, text
 from sqlalchemy.orm import sessionmaker
-from sqlalchemy.pool import StaticPool
 
 from app.api.deps import account_from_api_key
+from app.core.config import settings
 from app.db.base import Base
 from app.db.models import Account, ApiKey, PasswordReset
 from app.db.session import get_session
@@ -37,20 +42,40 @@ SIGN_UP = {
 }
 
 
+def _reachable() -> bool:
+    try:
+        create_engine(settings.DATABASE_URL).connect().close()
+        return True
+    except Exception:
+        return False
+
+
+pytestmark = pytest.mark.skipif(not _reachable(), reason="needs the local Postgres")
+
+
 @pytest.fixture()
 def db_session():
+    """A schema of this test's own, so nothing touches the developer's data."""
+    schema = f"test_{uuid.uuid4().hex[:12]}"
     engine = create_engine(
-        "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool
+        settings.DATABASE_URL,
+        connect_args={"options": f"-csearch_path={schema}"},
     )
+    admin = create_engine(settings.DATABASE_URL, isolation_level="AUTOCOMMIT")
+    with admin.connect() as connection:
+        connection.execute(text(f'CREATE SCHEMA "{schema}"'))
+
     tables = [Account.__table__, ApiKey.__table__, PasswordReset.__table__]
     Base.metadata.create_all(engine, tables=tables)
-    factory = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
-    session = factory()
+    session = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)()
     try:
         yield session
     finally:
         session.close()
         engine.dispose()
+        with admin.connect() as connection:
+            connection.execute(text(f'DROP SCHEMA "{schema}" CASCADE'))
+        admin.dispose()
 
 
 @pytest.fixture()
