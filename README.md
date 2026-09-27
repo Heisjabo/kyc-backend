@@ -352,15 +352,43 @@ a person decides.
 
 ### Evidence
 
-Files are written under `EVIDENCE_DIR`, one folder per verification, and each
-row records the key, the size and a SHA-256 so a file can be proved to be the
-one that was judged. In production that becomes a bucket and only
-`app/storage/evidence.py` changes, because a storage key is an opaque string
-rather than a path.
+Evidence is kept in **Google Drive**, under one folder for the whole platform
+(`GOOGLE_DRIVE_ROOT_FOLDER`, "KYC Verifications" by default) inside the folder id
+configured, with one subfolder per verification **named by our own verification
+id**. Never the client's reference: that is a string the client chooses and it is
+only unique within their account, so two clients using the same string would
+otherwise write into one folder. The storage key is the Drive file id. Each row
+also records the size and a SHA-256, so a file can be proved to be the one that
+was judged.
 
-Nothing is ever served directly from storage. These are photographs of identity
-documents and faces, so they are read back through the API by a caller holding a
-key, and embedded in the report rather than linked.
+Drive is reached with a **service account key**, the way our database backups do
+it. rclone is not involved here: we call the Drive API directly, with the same
+kind of key.
+
+| setting | where it comes from |
+|---|---|
+| `GOOGLE_SERVICE_ACCOUNT_EMAIL` | `client_email` in the service account's JSON key |
+| `GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY` | `private_key` from the same file, newlines written as `\n` |
+| `GOOGLE_SERVICE_ACCOUNT_JSON` | or the whole key file's contents, instead of those two |
+| `GOOGLE_DRIVE_FOLDER_ID` | the folder's id, out of its Drive URL |
+| `GOOGLE_DRIVE_ROOT_FOLDER` | the platform's own folder inside it, made on first use |
+
+The folder has to be on a **Shared Drive**, with the service account added as a
+member with Content manager rights, exactly as a person would be added. A service
+account owns no Drive storage of its own, so an upload into an ordinary My Drive
+folder comes back as "Service Accounts do not have storage quota". Every call is
+made with `supportsAllDrives`, which is what makes a Shared Drive visible to the
+API at all.
+
+There is no switch. Set the key and the folder and evidence goes to Drive; set
+neither and it goes to a folder on this machine, which is how the tests and a
+developer's laptop run. Set half of it and the service stops at start-up and
+names what is missing, rather than failing at somebody's first document.
+
+**Nothing is ever shared from Drive.** No file is made public, no link is handed
+out, no permission is granted. These are photographs of identity documents and
+faces: they are read back through our API by a caller holding a key, and embedded
+in reports rather than linked.
 
 ## Not built yet
 

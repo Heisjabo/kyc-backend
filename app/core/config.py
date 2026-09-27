@@ -30,10 +30,25 @@ class Settings(BaseSettings):
     # encouragement, and it is a setting so it can be lowered without a release.
     MAX_SESSION_TTL_MINUTES: int = 60 * 24 * 30
 
-    # Where the images and clips a verification produces are written. A folder
-    # while this runs on one machine; a bucket later, which changes
-    # app/storage/evidence.py and nothing else. Never served directly: files are
-    # read back through the API by a caller holding a key.
+    # Evidence lives in Google Drive, reached with a service account key, the way
+    # our database backups do. Its two interesting fields:
+    GOOGLE_SERVICE_ACCOUNT_EMAIL: str = ""
+    GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY: str = ""
+    # Or the whole key file, if a deployment would rather mount one.
+    GOOGLE_SERVICE_ACCOUNT_JSON: str = ""
+
+    # The folder evidence goes in: the id from its Drive URL. On a Shared Drive,
+    # which is the only place a service account can write.
+    GOOGLE_DRIVE_FOLDER_ID: str = ""
+
+    # The platform's own folder inside it. Everything is written under this one,
+    # a subfolder per verification named by our verification id.
+    GOOGLE_DRIVE_ROOT_FOLDER: str = "KYC Verifications"
+
+    # Where files go while Drive is not configured: a folder on this machine.
+    # That is how the tests and a developer's laptop run, and it is not a
+    # setting anybody turns on in production, where the Drive values above
+    # decide it.
     EVIDENCE_DIR: str = "var/evidence"
 
     # Set to a folder to keep the frames of each face check, for tuning thresholds.

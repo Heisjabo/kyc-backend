@@ -272,7 +272,7 @@ def _read(upload: UploadFile, field: str) -> bytes:
 
 def _keep(db: Session, verification: Verification, step_id: int, kind: FileKind,
           data: bytes, content_type: str) -> None:
-    stored = evidence.keep(verification.reference, data, kind.value, content_type)
+    stored = evidence.keep(verification.id, data, kind.value, content_type)
     if stored is None:
         return
     db.add(
