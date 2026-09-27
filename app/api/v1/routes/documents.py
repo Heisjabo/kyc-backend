@@ -56,7 +56,7 @@ def scan(
     result.portrait = portrait
     if portrait != "missing":
         result.verification_id = session.id
-        result.face_verification_url = str(request.base_url).rstrip("/") + f"/verify/{session.id}"
+        result.face_verification_url = str(request.base_url).rstrip("/") + f"/scratch-verify/{session.id}"
     if portrait == "small":
         result.warnings.append("DOCUMENT_PHOTO_SMALL")
     return result
@@ -126,7 +126,7 @@ def birth_certificate(
     )
     result.portrait = portrait
     result.verification_id = session.id
-    result.face_verification_url = str(request.base_url).rstrip("/") + f"/verify/{session.id}"
+    result.face_verification_url = str(request.base_url).rstrip("/") + f"/scratch-verify/{session.id}"
     if portrait == "small":
         result.warnings.append("DOCUMENT_PHOTO_SMALL")
     return result

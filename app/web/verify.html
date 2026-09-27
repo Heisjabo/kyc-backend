@@ -35,7 +35,7 @@
       </div>
 
       <aside>
-        <h2>Document on file</h2>
+        <h2>Scanned image</h2>
         <img id="document-face" alt="" hidden>
         <dl id="document-fields"></dl>
       </aside>
@@ -48,11 +48,11 @@
 
     <div class="stage">
       <div class="photos">
-        <figure><img id="captured" alt=""><figcaption>Captured now</figcaption></figure>
-        <figure><img id="document-face-2" alt="" hidden><figcaption>On the document</figcaption></figure>
+        <figure><img id="captured" alt=""><figcaption>Photo taken just now</figcaption></figure>
+        <figure><img id="document-face-2" alt="" hidden><figcaption>Photo on your document</figcaption></figure>
       </div>
       <aside>
-        <h2>Scores</h2>
+        <h2>What we measured</h2>
         <dl id="scores"></dl>
       </aside>
     </div>
@@ -66,7 +66,14 @@
 </main>
 
 <script>
-const verificationId = location.pathname.split('/').pop();
+let verificationId = location.pathname.split('/').pop();
+// Part of a verification session: results go to that session instead of a
+// document scanned on this machine a moment ago.
+// The token is in the path: /verify/{token}/...
+const SESSION_TOKEN = (location.pathname.match(/^\/verify\/([^/]+)/) || [])[1] || null;
+// In a session the path ends in /face, so the id has to come from the token,
+// not from the last segment. Everything the live guidance does is keyed on it.
+if (SESSION_TOKEN) verificationId = SESSION_TOKEN;
 const video = document.getElementById('video');
 const freeze = document.getElementById('freeze');
 const camera = document.getElementById('camera');
@@ -131,6 +138,25 @@ let claimed = [];   // {index, step}: which frame the guidance accepted for whic
 let cancelled = false;
 
 async function loadSession() {
+  if (SESSION_TOKEN) {
+    // The document was read moments ago in this same session, so show the face
+    // we cut from it rather than an empty panel.
+    const portrait = document.getElementById('document-face');
+    const response = await fetch(`/v1/sessions/${SESSION_TOKEN}/document-portrait`);
+    if (response.ok) {
+      const url = URL.createObjectURL(await response.blob());
+      portrait.src = url;
+      portrait.hidden = false;
+      const second = document.getElementById('document-face-2');
+      second.src = url;
+      second.hidden = false;
+    } else {
+      document.querySelector('aside h2').textContent = 'Scanned image';
+      document.getElementById('document-fields').innerHTML =
+        '<dt>photo</dt><dd>none could be read from it</dd>';
+    }
+    return;
+  }
   const response = await fetch(`/api/session/${verificationId}`);
   if (!response.ok) {
     status.textContent = 'This verification has expired. Scan a document again.';
@@ -462,10 +488,10 @@ async function submit(challenge) {
   data.append('steps', JSON.stringify(claimed));
 
   try {
-    // A child verifies with a birth certificate, which carries no photograph, so
-    // their check proves liveness and keeps a portrait rather than matching one.
-    const endpoint = documentType === 'birth_certificate' ? 'child-face' : 'face';
-    const response = await fetch(`/v1/verifications/${verificationId}/${endpoint}`, { method: 'POST', body: data });
+    const url = SESSION_TOKEN
+      ? `/v1/sessions/${SESSION_TOKEN}/face`
+      : `/v1/verifications/${verificationId}/face`;
+    const response = await fetch(url, { method: 'POST', body: data });
     show(await response.json(), response.ok);
   } catch (error) {
     status.textContent = 'Request failed: ' + error;
@@ -512,15 +538,15 @@ function show(body, ok) {
 
   const challenge = body.liveness.challenge;
   const matched = body.match
-    ? `<dt>match score</dt><dd>${body.match.score ?? '-'} (pass at ${body.match.threshold})</dd>
-       <dt>compared</dt><dd>${body.match.check?.details?.portrait_source === 'frame' ? 'best frontal frame' : 'the portrait taken'}</dd>`
+    ? `<dt>how alike the two faces are</dt><dd>${body.match.score ?? '-'} (a match needs ${body.match.threshold})</dd>
+       <dt>compared against</dt><dd>${body.match.check?.details?.portrait_source === 'frame' ? 'the clearest frame of you' : 'the photo taken at the end'}</dd>`
     : `<dt>face match</dt><dd>not applicable: a birth certificate carries no photograph</dd>
        <dt>portrait kept</dt><dd>${body.portrait_kept ? 'yes' : 'no'}</dd>`;
   document.getElementById('scores').innerHTML = matched + `
-    <dt>directions</dt><dd>${challenge.completed.join(', ') || 'none'}${challenge.missing.length ? ' · missing ' + challenge.missing.join(', ') : ''}</dd>
-    <dt>faces found</dt><dd>${body.liveness.frames_with_face} of ${body.liveness.frames_received}</dd>
-    <dt>depth (planarity)</dt><dd>${body.liveness.planarity ?? '-'}% (a flat photo scores under 1.2)</dd>
-    <dt>time</dt><dd>${body.processing_ms} ms</dd>`;
+    <dt>movements seen</dt><dd>${challenge.completed.join(', ') || 'none'}${challenge.missing.length ? ' · not seen: ' + challenge.missing.join(', ') : ''}</dd>
+    <dt>frames with your face in</dt><dd>${body.liveness.frames_with_face} of ${body.liveness.frames_received}</dd>
+    <dt>a real face, not a photo</dt><dd>${body.liveness.planarity ?? '-'}% depth (a printed photo scores under 1.2)</dd>
+    <dt>time taken</dt><dd>${body.processing_ms} ms</dd>`;
 
   document.getElementById('poses').textContent = body.liveness.poses
     .map((pose) => `frame ${String(pose.index).padStart(2)}  faces=${pose.faces}  yaw=${pose.yaw ?? '-'}  pitch=${pose.pitch ?? '-'}  ${pose.direction ?? ''}`)

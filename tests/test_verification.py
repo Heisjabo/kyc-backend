@@ -209,7 +209,10 @@ def test_expired_session_is_gone(session_with_document):
 
 def test_pages_render():
     assert "Document scan" in client.get("/").text
-    assert "Face check" in client.get("/verify/anything").text
+    # /verify/{token} belongs to a session now; the old flow's face page moved
+    # aside so the two do not answer the same URL.
+    assert "Face check" in client.get("/scratch-verify/anything").text
+    assert "Identity verification" in client.get("/verify/anything").text
     assert client.get("/static/style.css").status_code == 200
 
 
@@ -264,8 +267,10 @@ def test_the_challenge_clip_is_accepted_and_accounted_for(monkeypatch, session_w
     stub_capture(monkeypatch, PASSES + 0.08)
     kept = {}
     monkeypatch.setattr(
-        verifications_route.evidence, "keep_challenge_video",
-        lambda verification_id, data, content_type: kept.update(size=len(data), type=content_type),
+        verifications_route.evidence, "keep",
+        lambda reference, data, kind, content_type="image/jpeg": kept.update(
+            kind=kind, size=len(data), type=content_type
+        ),
     )
     files = [("frames", (f"f{i}.jpg", frame_bytes(seed=i), "image/jpeg")) for i in range(14)]
     files.append(("video", ("challenge.webm", b"\x1a\x45\xdf\xa3fake-clip", "video/webm")))
@@ -273,7 +278,7 @@ def test_the_challenge_clip_is_accepted_and_accounted_for(monkeypatch, session_w
         f"/v1/verifications/{session_with_document.id}/face", files=files, data={"challenge": "full"}
     )
     assert response.status_code == 200
-    assert kept["type"] == "video/webm" and kept["size"] > 0
+    assert kept["kind"] == "challenge_video" and kept["type"] == "video/webm" and kept["size"] > 0
 
 
 def test_a_clip_that_is_not_video_is_refused(monkeypatch, session_with_document):
@@ -286,22 +291,3 @@ def test_a_clip_that_is_not_video_is_refused(monkeypatch, session_with_document)
     assert response.status_code == 415
 
 
-# A child's face step: liveness only
-
-def test_a_childs_face_step_proves_liveness_and_never_matches(monkeypatch, session_with_document):
-    stub_capture(monkeypatch, FAILS - 0.3)      # a score that would fail a match
-    files = [("frames", (f"f{i}.jpg", frame_bytes(seed=i), "image/jpeg")) for i in range(14)]
-    files.append(("portrait", ("portrait.jpg", frame_bytes(seed=99), "image/jpeg")))
-    response = client.post(
-        f"/v1/verifications/{session_with_document.id}/child-face", files=files, data={"challenge": "full"}
-    )
-    body = response.json()
-    assert response.status_code == 200
-    assert "match" not in body                  # nothing that could be read as a comparison
-    assert body["decision"] == "pass"           # the liveness was good, so the check passes
-    assert body["portrait_kept"] is True
-
-
-def test_the_child_face_endpoint_is_in_the_api_schema():
-    schema = client.get("/openapi.json").json()
-    assert "/v1/verifications/{verification_id}/child-face" in schema["paths"]

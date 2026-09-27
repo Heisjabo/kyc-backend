@@ -146,6 +146,244 @@ found and removed.
   pages keep working. Attaching the guard and recording which account a
   verification belongs to is the next piece.
 
+## A verification, start to finish
+
+A verification is a session a person walks through, not a single check. The
+client opens one, sends the person a link, and polls for the answer.
+
+```
+client                     us                              person
+  |  POST /v1/verifications  |                                |
+  |------------------------->|  row created, steps pending    |
+  |  reference, session_url  |                                |
+  |<-------------------------|                                |
+  |                          |        the link, by email or QR |
+  |                          |------------------------------->|
+  |                          |  GET /v1/sessions/{token}      |
+  |                          |<-------------------------------|
+  |                          |  POST .../document             |
+  |                          |<-------------------------------|
+  |                          |  POST .../face                 |
+  |                          |<-------------------------------|
+  |  GET /v1/verifications/{reference}                        |
+  |------------------------->|                                |
+  |  passed / failed / needs_review                           |
+  |<-------------------------|                                |
+```
+
+**Two audiences, two kinds of access.** The client holds an API key and
+everything they touch is scoped to their account. The person holds only the
+session link, and what they can read through it is deliberately thin: where they
+are and what is next, with no reasons, no extracted fields and nothing about the
+client. That is what makes the link safe to put in a QR code: the same session
+can be opened on a phone for a better camera and finished back on the laptop,
+because both are looking at one row.
+
+**Steps happen in the order the client asked for.** A face step before any
+document has been scanned is refused with a 409 rather than quietly accepted,
+because a face matched against a document nobody has read is not a verification
+of anything.
+
+**A retry is a new attempt, not an overwrite.** Somebody who failed twice on
+glare and passed on the third try reads that way afterwards.
+
+**What the document is checked against comes from initiation**, never from the
+request carrying the images. The person cannot type a different name into their
+own check.
+
+**A document with no face on it does not pass.** An identity document carries a
+portrait, so if none can be found the step stops with `NO_PORTRAIT_ON_DOCUMENT`
+rather than letting the person walk on to a face check with nothing to compare
+against. A birth certificate is the exception, since it carries no photograph.
+Whether there is a portrait is decided by the same detector the match uses, not
+by the one that cuts the picture for display: two detectors disagreeing is how a
+card with a perfectly good face on it was once recorded as having none.
+
+### What a client sends
+
+```json
+{
+  "reference": "TUESDAY-ORDER-9912",
+  "services": ["document", "face"],
+  "applicant": {
+    "first_name": "Jean Marie",
+    "last_name": "Jabo",
+    "date_of_birth": "2002-02-24",
+    "country": "Rwanda",
+    "email": "jean@tuesday.africa",
+    "phone": "+250788123456"
+  },
+  "country": "RWA",
+  "language": "EN",
+  "ttl_days": 7
+}
+```
+
+`reference` is the only identifier a client sends, exactly as we send Shufti
+nothing but a reference. Nothing names the person: `customer_id` comes back in
+the response, generated here, and is theirs to store if they want to recognise a
+returning applicant later.
+
+The names and date of birth are what the document is checked against, so they
+have to match the document as printed. `country` is the country the document is
+expected from. `callback_url` and `redirect_url` are accepted and recorded;
+nothing is sent to them yet.
+
+### Endpoints
+
+| | |
+|---|---|
+| `POST /v1/verifications` | open one, get the link. API key |
+| `GET /v1/verifications/{reference}` | how that customer got on. API key |
+| `GET /v1/sessions/{token}` | where the person is. Link only |
+| `POST /v1/sessions/{token}/document` | submit the document. Link only |
+| `POST /v1/sessions/{token}/face` | liveness and the face match. Link only |
+
+`session_url` in the response points at the first of these:
+
+| | |
+|---|---|
+| `/verify/{token}` | where they are and what is next, with the QR to carry on by phone |
+| `/verify/{token}/document` | choose which document, then photograph it. The person's details are not asked for again: they came from the client at initiation, and nothing typed here is sent |
+| `/verify/{token}/face` | the liveness challenge and the portrait |
+
+`reference` is the client's own string, unique within their account, and it is
+what they look a customer up by. One is generated if they send none.
+
+### How long a link lives
+
+`ttl` is in minutes and defaults to 60, as Shufti defines it. `ttl_days` says the
+same thing for people who would rather write 7. Send one or the other, never
+both, or the request is refused. The ceiling is 30 days
+(`MAX_SESSION_TTL_MINUTES`), because a link that lives for weeks is a link that
+can be forwarded.
+
+When it runs out the verification moves to `expired` with the event
+`request.timeout`: as soon as anybody looks at it, so a polling client sees it
+without waiting, and in a sweep for the ones abandoned in silence.
+
+### The old test pages
+
+`/` and `/capture` still drive the original in-memory flow, which writes to no
+table, and their face step now lives at `/scratch-verify/{id}` because
+`/verify/{token}` belongs to a session. They are kept for trying the document and
+face engines on their own.
+
+### Status and events
+
+Status is a lifecycle state: `pending`, `in_progress`, `passed`, `failed`,
+`needs_review`, `expired`. Each one also sets an `event` from Shufti's
+vocabulary (`request.received`, `request.pending`, `verification.accepted`,
+`verification.declined`, `request.timeout`), so a client already integrated with
+them can match on the strings they already match on.
+
+A step's status is a verdict rather than a state, and uses the same words the
+document checks use: `pass`, `fail`, `review`, `pending`, `skipped`.
+
+### A child, verified by a parent
+
+A child never verifies themselves. An adult verifies in the ordinary way, and
+their birth certificate is then a second document proving a **link** rather than
+an identity:
+
+```
+POST /v1/verifications/{parent reference}/children     X-API-Key
+  certificate, first_name, last_name, date_of_birth
+```
+
+Four things are checked on it:
+
+| check | outcome if it fails |
+|---|---|
+| it reads as a birth certificate | fail |
+| the parent's **verified** names appear on it, either side | fail |
+| the child's names appear on it, and the date of birth matches | fail |
+| the country matches the country on the parent's document | **review** |
+
+The parent's names come off their own verified record, never from the request,
+so a caller can say which parent to use but not who the parent is. The age rule
+does not apply, because a child is under 18 by definition.
+
+The country check is the one that goes to a person rather than failing: a family
+living abroad has a genuine certificate from another country, and refusing that
+outright costs a real customer.
+
+The parent's verification must have **passed**. The child becomes a verification
+of its own, with its own applicant, evidence and verdict, pointing at the
+parent's through `parent_verification_id`.
+
+## The schema
+
+Integers inside, opaque strings outside. Primary keys are `BIGINT` because whole
+ids get read out, compared by eye and typed into tickets. They are enumerable,
+so nothing a client or a browser sees is one of them: a verification travels as
+its `reference`, a person as their `customer_id`, a session as its
+`session_token`.
+
+| table | holds |
+|---|---|
+| `accounts` | a customer of this service. They sign in and hold API keys |
+| `applicants` | a person being verified. They never sign in. `customer_id` is the public id we generate for them, 22 characters, the shape Shufti shows as Customer ID |
+| `verifications` | one session: what was asked for, where it stands, how it ended, the settings echoed back for the report, the reasons and warnings |
+| `verification_steps` | one attempt at one step, with its own reasons, result and the device that did it |
+| `document_scans` | one document read: the verdict and every field it gave up |
+| `verification_files` | every image and clip: document sides, the portrait cut from the document, the selfie, the liveness clip, the report |
+| `face_checks` | liveness, planarity, the match and its threshold, the duplicate face warning and the deepfake columns |
+| `face_templates` | the numbers a face reduces to, so a later verification can ask whether it has seen this face before |
+| `device_sessions` | address, city, coordinates, ASN, fingerprint, timezone, operating system and the risk signals |
+| `callback_deliveries` | every attempt to tell the client, with its HTTP code |
+| `audit_events` | who did what |
+
+**Claimed and verified are different fields.** What the client typed at
+initiation lives on the verification; what a document proved lives on the
+applicant. Anything that later relies on identity, such as checking a child's
+certificate against a parent, reads the verified side.
+
+**Applicants belong to one account.** The same human verified by two clients is
+two applicants, because sharing identity between customers is a legal question
+rather than a technical one.
+
+**Every verification opens its own applicant.** A client sends one reference per
+verification and nothing that names the person, so two attempts by the same human
+are two applicants. What links them is the face: a portrait matching somebody
+else's record raises a warning naming that verification, never a failure and
+never an automatic merge. Face matching has an error rate and siblings exist, so
+a person decides.
+
+### Evidence
+
+Files are written under `EVIDENCE_DIR`, one folder per verification, and each
+row records the key, the size and a SHA-256 so a file can be proved to be the
+one that was judged. In production that becomes a bucket and only
+`app/storage/evidence.py` changes, because a storage key is an opaque string
+rather than a path.
+
+Nothing is ever served directly from storage. These are photographs of identity
+documents and faces, so they are read back through the API by a caller holding a
+key, and embedded in the report rather than linked.
+
+## Not built yet
+
+Deliberately parked, in the order they matter:
+
+- **Address verification and the due diligence form.** Both exist as step types
+  in the schema and the vocabulary, so adding them is a handler rather than a
+  migration. Our own Shufti integration already sends `address` and
+  `questionnaire`, which is the shape to match.
+- **Callbacks.** The table is there and nothing writes to it: we do not yet tell
+  a client anything, they have to poll.
+- **Device and network intelligence.** The table holds the shape of Shufti's
+  report block. We record the address, user agent and language that arrive for
+  free; ASN, proxy, Tor, data centre and the fraud score need a lookup service.
+- **Deepfake detection.** Columns exist on `face_checks` so turning it on is a
+  write rather than a migration.
+- **The verification report PDF**, assembled from the verification, its steps
+  and its files.
+- **Email.** Password resets are created, hashed, stored and spent, and nothing
+  is sent.
+- **Calibration.** The face threshold is drawn between two small measured
+  groups, not set from measured error rates over a real population.
+
 ## Document check
 
 `POST /v1/document/scan` (multipart form)

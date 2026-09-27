@@ -64,11 +64,18 @@ def frame(
     if len(data) > document_rules.MAX_UPLOAD_BYTES:
         raise HTTPException(status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, "frame is larger than 10 MB")
 
-    # Movement is measured against this person's resting pose, which is learned
-    # while the camera is being checked and kept with their verification.
+    # Movement is measured against this person's resting pose, learned while the
+    # camera is being checked. It is held against whatever the page calls itself,
+    # which is an in-memory session id in the old flow and a session token in a
+    # verification: both are opaque strings and neither is worth keeping once the
+    # person walks away.
     session = sessions.get(verification_id) if verification_id else None
-    resting = session.resting_mesh if session else None
+    resting = session.resting_mesh if session else sessions.resting_for(verification_id)
+
     answer, mesh = probe_frame(data, resting)
-    if session is not None and calibrate and mesh is not None and answer.usable:
-        session.resting_mesh = mesh
+    if calibrate and mesh is not None and answer.usable:
+        if session is not None:
+            session.resting_mesh = mesh
+        elif verification_id:
+            sessions.remember_resting(verification_id, mesh)
     return answer

@@ -5,3 +5,4 @@ __pycache__/
 .env
 models/*.onnx
 models/*.task
+var/

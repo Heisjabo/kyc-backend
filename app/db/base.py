@@ -5,11 +5,10 @@ refer to an index or a foreign key by name in a downgrade; Postgres names them
 itself otherwise, and those names differ between databases.
 """
 
-import uuid
 from datetime import datetime
 from typing import Annotated
 
-from sqlalchemy import DateTime, MetaData, Uuid, func
+from sqlalchemy import BigInteger, DateTime, MetaData, func
 from sqlalchemy.orm import DeclarativeBase, mapped_column
 
 NAMING_CONVENTION = {
@@ -20,9 +19,14 @@ NAMING_CONVENTION = {
     "pk": "pk_%(table_name)s",
 }
 
-# Keys are generated in Python so the caller holds the id before the row is
-# written, which is what lets a document scan name its images in one flush.
-UuidPk = Annotated[uuid.UUID, mapped_column(Uuid, primary_key=True, default=uuid.uuid4)]
+# Plain counting numbers. Whole ids get read out, compared by eye and typed into
+# support tickets, and a 36-character uuid is miserable for all three.
+#
+# They are enumerable, so nothing a client or a browser sees is one of these:
+# a verification travels as its random `reference`, a person as their
+# `customer_id`, and a session as its `session_token`. The integers stay inside
+# the database.
+IntPk = Annotated[int, mapped_column(BigInteger, primary_key=True, autoincrement=True)]
 
 # now() is the database's clock, not the application server's: rows written by
 # different processes have to be comparable.

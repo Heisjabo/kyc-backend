@@ -54,6 +54,28 @@ def get(session_id: str) -> VerificationSession | None:
         return _sessions.get(session_id)
 
 
+# The resting face mesh of somebody currently in front of a camera, keyed by
+# whatever their page identifies itself with: an in-memory session id in the old
+# flow, a session token in a verification. It belongs in memory rather than in a
+# table because it is worth nothing once they walk away, and it is what the live
+# guidance measures every movement against.
+_resting: dict[str, Any] = {}
+
+
+def remember_resting(key: str, mesh: Any) -> None:
+    with _lock:
+        if len(_resting) > 500:          # a camera visit, not a record: bounded
+            _resting.clear()
+        _resting[key] = mesh
+
+
+def resting_for(key: str | None) -> Any | None:
+    if not key:
+        return None
+    with _lock:
+        return _resting.get(key)
+
+
 def _prune() -> None:
     cutoff = time.time() - settings.SESSION_TTL_MINUTES * 60
     for key in [key for key, session in _sessions.items() if session.created_at < cutoff]:
