@@ -1,8 +1,12 @@
 """Address proof pipeline.
 
 read (a photograph, or a PDF's own text, or a rendered PDF) -> quality -> is it the
-kind of proof they said -> is the address on it -> does it belong to the same
-person -> is it recent enough -> decision
+kind of proof they said -> is the address on it, as it was written -> does it
+belong to the same person -> is it recent enough -> decision
+
+The address comparison is direct. Whatever the client sent has to appear on the
+document; case, spacing and punctuation are ignored and nothing else is. See
+app/engines/addresses.py.
 
 The checks are named as Shufti names them in its verification report, so a client
 holding one of their reports can map ours onto it line for line:
@@ -22,9 +26,7 @@ import time
 from dataclasses import asdict
 from datetime import date
 
-from rapidfuzz import fuzz
-
-from app.engines.addresses import Places, is_po_box, normalise, read_places
+from app.engines.addresses import address_on_document, document_text, is_po_box
 from app.engines.fields import find_dates
 from app.engines.image import InvalidImageError, decode_image
 from app.engines.ocr import read_document
@@ -32,7 +34,6 @@ from app.engines.pdf import is_pdf, render_pages, text_lines
 from app.engines.quality import assess_quality
 from app.pipeline.document import names_on_document
 from app.rules import address as rules
-from app.rules import places as place_rules
 from app.schemas.address import AddressCheckResponse, AddressExtracted, ProofType
 from app.schemas.document import CheckResult, CheckStatus, Decision
 
@@ -200,7 +201,7 @@ def _type_check(proof_type: ProofType, lines: list[str]) -> CheckResult:
     Sent to a person when it does not, rather than refused: a small local bill can
     name none of the words on any list and still be a genuine bill.
     """
-    text = normalise(" ".join(lines))
+    text = document_text(lines)
     found = [word for word in rules.TYPE_WORDS[proof_type.value] if word in text]
     return CheckResult(
         name="address_document_type",
@@ -211,70 +212,32 @@ def _type_check(proof_type: ProofType, lines: list[str]) -> CheckResult:
 
 
 def _address_check(claimed: str, lines: list[str], extracted: AddressExtracted) -> CheckResult:
-    """Do the address and the document name the same place, at any level?
+    """Does the document say the address we were given, as it was written?
 
-    Pass or fail, nothing in between. Sharing a street is the strongest answer and
-    sharing a country the weakest, so the level that matched is recorded: a country
-    match means a Rwandan bill cleared a Rwandan address, which is worth seeing in
-    a report rather than hiding behind the word "pass".
+    Direct: the address has to appear on the document. Case, spacing and
+    punctuation are ignored, and the document's lines are joined first so an
+    address printed across two lines still reads as one. Nothing else is
+    forgiven, and there is no partial credit: "Kigali, Rwanda" is not matched by a
+    bill printing "KG 333 St", nor by one printing "Kigali City".
+
+    Pass or fail, never review. A check that asks a person to decide whenever two
+    addresses are written differently is a check nobody runs.
     """
-    wanted = read_places(claimed)
-    on_document = read_places(" ".join(lines))
-
-    matched_level, matched = _best_overlap(wanted, on_document)
-    extracted.matched_level = matched_level
-    extracted.matched_places = sorted(matched)
-
-    if matched_level is None:
-        return CheckResult(
-            name="address_on_document_match",
-            status=CheckStatus.failed,
-            reasons=["ADDRESS_NOT_ON_DOCUMENT"],
-            details={
-                "claimed": claimed,
-                "claimed_places": _as_dict(wanted),
-                "document_places": _as_dict(on_document),
-            },
-        )
+    found = address_on_document(claimed, lines)
+    extracted.address_found = found
 
     return CheckResult(
         name="address_on_document_match",
-        status=CheckStatus.passed,
-        # A country-level pass is thin evidence. It passes, and it says so.
-        warnings=["ADDRESS_MATCHED_ON_COUNTRY_ONLY"] if matched_level == place_rules.LEVEL_COUNTRY else [],
+        status=CheckStatus.passed if found else CheckStatus.failed,
+        reasons=[] if found else ["ADDRESS_MISMATCH"],
         details={
             "claimed": claimed,
-            "matched_level": matched_level,
-            "matched": sorted(matched),
-            "claimed_places": _as_dict(wanted),
+            "looked_for": document_text([claimed]),
+            # What the document actually says, so a person can see how far off it
+            # was without opening the file.
+            "document_text": document_text(lines)[:400],
         },
     )
-
-
-def _best_overlap(wanted: Places, on_document: Places) -> tuple[str | None, set[str]]:
-    """The strongest level at which the two sides name the same place."""
-    for level in place_rules.LEVELS:
-        shared = _shared(wanted.at(level), on_document.at(level))
-        if shared:
-            return level, shared
-    return None, set()
-
-
-def _shared(left: set[str], right: set[str]) -> set[str]:
-    """Places in both sets, allowing for OCR mangling a letter of a name."""
-    shared = left & right
-    for item in left - shared:
-        if any(fuzz.ratio(item, other) >= rules.PLACE_MATCH_SCORE for other in right):
-            shared.add(item)
-    return shared
-
-
-def _as_dict(found: Places) -> dict:
-    return {
-        "streets": sorted(found.streets),
-        "cities": sorted(found.cities),
-        "countries": sorted(found.countries),
-    }
 
 
 def _owner_check(names: list[str | None], lines: list[str]) -> CheckResult:

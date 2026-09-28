@@ -53,24 +53,3 @@ MIN_TEXT_LINES = 5
 # A PO box is not an address anybody lives at. Our Shufti request says
 # po_box: false, so this refuses the same thing.
 PO_BOX_WORDS = ("po box", "p o box", "p.o box", "p.o. box", "post office box", "postbox")
-
-# Words that carry no place in them. Dropped from both sides before matching, so
-# "KG 586 Street" and "KG 586 St" compare as the same thing.
-FILLER_WORDS = {
-    "street", "st", "avenue", "ave", "road", "rd", "lane", "ln", "drive", "dr",
-    "boulevard", "blvd", "highway", "hwy", "close", "way", "plot", "house",
-    "apartment", "apartments", "apt", "flat", "floor", "suite", "unit", "room",
-    "building", "block", "city", "town", "village", "cell", "sector", "district",
-    "province", "county", "state", "zone", "number", "no", "nr", "of", "the",
-    "and", "po", "box", "zip", "code", "postal", "postcode",
-}
-
-# A token shorter than this says nothing on its own: "KG" is a street prefix, not
-# a place, and OCR noise is mostly one or two characters.
-MIN_TOKEN_LENGTH = 3
-
-# How close two place names have to read to count as the same place, as a
-# rapidfuzz ratio out of 100. "Kigali" against OCR's "Kigah" is the case this is
-# for; it is deliberately tighter than the name matcher, because place names are
-# short and a loose line would match "Kigali" to "Kicali" in another country.
-PLACE_MATCH_SCORE = 88

@@ -25,7 +25,7 @@ from app.core.config import settings
 from app.db.base import Base
 from app.db.models import FileKind, Step, StepStatus, VerificationFile, VerificationStep
 from app.db.session import get_session
-from app.engines.addresses import is_po_box, read_places
+from app.engines.addresses import address_on_document, is_po_box, normalise
 from app.main import app
 from app.pipeline.address import scan_address_proof
 from app.schemas.address import ProofType
@@ -38,38 +38,43 @@ ACCOUNT = {
 }
 
 
-# The places, read and expanded
+# The comparison, which is direct
 
-def test_a_city_implies_its_country():
-    found = read_places("Kigali, Rwanda")
-    assert found.cities == {"kigali"} and found.countries == {"rwanda"}
-
-
-def test_a_street_code_implies_its_city():
-    """KG, KK and KN are Kigali's three districts, so the code names the city."""
-    found = read_places("KG 580 St")
-    assert found.streets == {"kg 580"}
-    assert found.cities == {"kigali"} and found.countries == {"rwanda"}
+def test_the_same_address_matches_however_it_was_punctuated():
+    """Case, spacing and punctuation are how text was printed, not what it says."""
+    assert address_on_document("KG 586 Street, Kigali", ["kg 586 street kigali"])
+    assert address_on_document("KG 586 Street, Kigali", ["Address: KG 586 STREET, KIGALI"])
+    assert address_on_document("KG 586 Street, Kigali", ["KG  586   Street,  Kigali."])
 
 
-def test_a_district_implies_its_city_and_its_country_at_the_right_levels():
-    """Kicukiro is in Kigali, and Kigali is not a country."""
-    found = read_places("Kicukiro")
-    assert found.cities == {"kicukiro", "kigali"}
-    assert found.countries == {"rwanda"}
+def test_an_address_printed_across_two_lines_still_matches():
+    """A line break is not a difference in the address."""
+    assert address_on_document("KG 586 Street, Kigali City", ["KG 586 Street", "Kigali City"])
 
 
-def test_the_united_states_is_one_country_not_three_words():
-    found = read_places("1200 Dove School Road, CA, United States of America")
-    assert found.countries == {"united states"}
-    assert "ca" in found.cities
-    assert "dove" in found.streets and "school" in found.streets
+def test_a_street_code_does_not_stand_in_for_the_city():
+    """The case to be sure about: Kigali, Rwanda against a bill printing KG 333 St
+    is a mismatch, and it fails."""
+    assert not address_on_document("Kigali, Rwanda", ["Address: KG 333 St"])
 
 
-def test_filler_words_are_not_places():
-    found = read_places("House No 4, Sector Remera, Kigali City")
-    assert "house" not in found.streets and "sector" not in found.streets
-    assert found.cities == {"kigali", "remera"}
+def test_a_different_wording_of_the_same_place_does_not_match():
+    assert not address_on_document("Kigali, Rwanda", ["KIGALI CITY"])
+    assert not address_on_document("KG 586 Street", ["KG 586 St"])
+    assert not address_on_document("Kicukiro, Kigali", ["Kigali, Rwanda"])
+
+
+def test_a_partly_shared_address_does_not_match():
+    assert not address_on_document("KG 586 Street, Kigali", ["KG 12 Street, Kigali"])
+
+
+def test_an_empty_address_matches_nothing():
+    assert not address_on_document("", ["KG 586 Street, Kigali"])
+    assert not address_on_document("   ", ["KG 586 Street, Kigali"])
+
+
+def test_normalising_keeps_the_words_and_drops_the_rest():
+    assert normalise("KG 586 Street, Kigali City!") == "kg 586 street kigali city"
 
 
 def test_a_po_box_is_recognised_however_it_is_written():
@@ -90,7 +95,7 @@ def bill(*lines: str, width: int = 1400, height: int = 900) -> bytes:
     return cv2.imencode(".jpg", image, [cv2.IMWRITE_JPEG_QUALITY, 95])[1].tobytes()
 
 
-def utility_bill(place="KIGALI CITY", name="JEAN MUGISHA", issued=None) -> bytes:
+def utility_bill(place="KG 586 ST, KIGALI CITY", name="JEAN MUGISHA", issued=None) -> bytes:
     issued = issued or date.today() - timedelta(days=10)
     return bill(
         "REG ELECTRICITY BILL",
@@ -155,7 +160,8 @@ def digital_pdf(*lines: str) -> bytes:
     return bytes(out)
 
 
-def scan(proof, claimed="Kigali, Rwanda", names=("Jean", "Mugisha"), proof_type=ProofType.utility_bill):
+def scan(proof, claimed="KG 586 St, Kigali City", names=("Jean", "Mugisha"),
+         proof_type=ProofType.utility_bill):
     return scan_address_proof(
         proof_type=proof_type,
         claimed_address=claimed,
@@ -168,40 +174,33 @@ def named(result) -> dict:
     return {check.name: check.status for check in result.checks}
 
 
-def test_a_city_on_the_bill_matches_a_city_in_the_address():
-    result = scan(utility_bill(place="KIGALI CITY"))
+def test_the_address_written_the_same_way_passes():
+    result = scan(utility_bill(place="KG 586 ST, KIGALI CITY"))
     assert result.decision == Decision.passed
-    assert result.extracted.matched_level == "city"
+    assert result.extracted.address_found is True
     assert named(result)["address_on_document_match"] == CheckStatus.passed
 
 
-def test_the_city_and_country_together_match():
-    result = scan(utility_bill(place="KIGALI CITY, RWANDA"))
-    assert result.decision == Decision.passed
-    assert result.extracted.matched_level == "city"
+def test_a_street_code_on_the_bill_fails_against_a_city_and_country():
+    """The case the client asked about: opened with "Kigali, Rwanda", the bill
+    prints "KG 333 St". That is a mismatch, and it fails outright."""
+    result = scan(utility_bill(place="KG 333 ST"), claimed="Kigali, Rwanda")
+    assert result.decision == Decision.failed
+    assert "ADDRESS_MISMATCH" in result.reasons
+    assert result.extracted.address_found is False
 
 
-def test_a_street_code_on_the_bill_matches_the_city_claimed():
-    """The person claimed Kigali; the bill only prints KG 580 St. Same place."""
-    result = scan(utility_bill(place="KG 580 ST"))
-    assert result.decision == Decision.passed
-    assert result.extracted.matched_level == "city"
-    assert "kigali" in result.extracted.matched_places
-
-
-def test_a_different_city_and_country_fails():
+def test_a_different_city_fails():
     result = scan(utility_bill(place="NAIROBI, KENYA"))
     assert result.decision == Decision.failed
-    assert "ADDRESS_NOT_ON_DOCUMENT" in result.reasons
+    assert "ADDRESS_MISMATCH" in result.reasons
 
 
-def test_matching_on_the_country_alone_passes_but_says_so():
-    """A Rwandan bill against a Rwandan address is a thin pass, and the record
-    has to show that it was thin."""
-    result = scan(utility_bill(place="MUSANZE"), claimed="Kigali, Rwanda")
-    assert result.decision == Decision.passed
-    assert result.extracted.matched_level == "country"
-    assert "ADDRESS_MATCHED_ON_COUNTRY_ONLY" in result.warnings
+def test_a_near_miss_fails_rather_than_going_to_a_person():
+    """Same city, different street. No partial credit and no review."""
+    result = scan(utility_bill(place="KG 12 ST, KIGALI CITY"))
+    assert result.decision == Decision.failed
+    assert "ADDRESS_MISMATCH" in result.reasons
 
 
 def test_a_po_box_is_refused_without_reading_anything():
@@ -236,7 +235,7 @@ def test_a_bill_with_no_readable_date_goes_to_a_person():
     proof = bill(
         "REG ELECTRICITY BILL",
         "Customer: JEAN MUGISHA",
-        "Address: KIGALI CITY",
+        "Address: KG 586 ST, KIGALI CITY",
         "Meter number: 37200145",
         "Units: 45 kWh",
         "Amount due: RWF 12,400",
@@ -257,12 +256,12 @@ def test_a_bank_statement_is_recognised_as_one():
         "BANK OF KIGALI",
         "ACCOUNT STATEMENT",
         "Account holder: JEAN MUGISHA",
-        "Address: KG 580 ST, KIGALI",
+        "Address: KG 586 ST, KIGALI",
         "Opening balance: 120,000",
         "Closing balance: 98,400",
         "Date: " + (date.today() - timedelta(days=5)).strftime("%d-%m-%Y"),
     )
-    result = scan(proof, proof_type=ProofType.bank_statement)
+    result = scan(proof, claimed="KG 586 St, Kigali", proof_type=ProofType.bank_statement)
     assert result.decision == Decision.passed
     assert named(result)["address_document_type"] == CheckStatus.passed
 
@@ -292,9 +291,9 @@ def test_a_pdf_statement_is_read_from_its_own_text(monkeypatch):
         "Closing balance: 98,400",
         "Date: " + (date.today() - timedelta(days=7)).strftime("%d-%m-%Y"),
     )
-    result = scan(proof, proof_type=ProofType.bank_statement)
+    result = scan(proof, claimed="KG 586 St, Kigali City", proof_type=ProofType.bank_statement)
     assert result.decision == Decision.passed
-    assert result.extracted.matched_level in ("street", "city")
+    assert result.extracted.address_found is True
     assert any("pdf text" in str(check.details.get("read", "")) for check in result.checks)
 
 
@@ -304,7 +303,7 @@ def test_a_scan_wrapped_in_a_pdf_is_rendered_and_read():
     proof = scanned_pdf(
         "REG ELECTRICITY BILL",
         "Customer: JEAN MUGISHA",
-        "Address: KIGALI CITY",
+        "Address: KG 586 ST, KIGALI CITY",
         "Meter number: 37200145",
         "Units: 45 kWh",
         "Date: " + (date.today() - timedelta(days=12)).strftime("%d-%m-%Y"),
@@ -329,7 +328,7 @@ def test_quality_is_not_judged_on_a_pdf():
     result = scan(digital_pdf(
         "REG ELECTRICITY BILL",
         "Customer: JEAN MUGISHA",
-        "Address: KIGALI CITY",
+        "Address: KG 586 St, Kigali City",
         "Meter number: 37200145",
         "Units: 45 kWh",
         "Date: " + (date.today() - timedelta(days=3)).strftime("%d-%m-%Y"),
@@ -396,7 +395,7 @@ def api_key(client) -> dict:
     return {"X-API-Key": made["key"]}
 
 
-def open_with_address(client, api_key, address="KG 586 Street, Kigali, Rwanda", services=None):
+def open_with_address(client, api_key, address="KG 586 St, Kigali City", services=None):
     body = {
         "reference": f"ADDR-{uuid.uuid4().hex[:8]}",
         "services": services or ["document", "address"],
@@ -469,8 +468,8 @@ def test_the_step_records_its_verdict_and_keeps_the_file(client, api_key, monkey
     body = submit_address(client, token).json()
     assert body["decision"] == "pass"
     assert body["extracted"]["document_type"] == "utility_bill"
-    assert body["extracted"]["full_address"] == "KG 586 Street, Kigali, Rwanda"
-    assert body["extracted"]["matched_level"] in ("street", "city")
+    assert body["extracted"]["full_address"] == "KG 586 St, Kigali City"
+    assert body["extracted"]["address_found"] is True
 
     step = db_session.scalars(
         select(Step).where(Step.step == VerificationStep.address)
@@ -496,7 +495,7 @@ def test_the_address_comes_from_the_verification_not_the_request(client, api_key
         files={"proof": ("bill.jpg", utility_bill(place="NAIROBI"), "image/jpeg")},
     )
     body = response.json()
-    assert body["extracted"]["full_address"] == "KG 586 Street, Kigali, Rwanda"
+    assert body["extracted"]["full_address"] == "KG 586 St, Kigali City"
     assert body["decision"] == "fail"
 
 

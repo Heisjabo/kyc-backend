@@ -24,9 +24,8 @@ class AddressExtracted(BaseModel):
 
     document_type: ProofType
     full_address: str
-    # "street", "city" or "country": how closely the two sides agreed.
-    matched_level: str | None = None
-    matched_places: list[str] = []
+    # Was the address we were given printed on the document, as it was written?
+    address_found: bool | None = None
     proof_date: date | None = None
     proof_age_days: int | None = None
 

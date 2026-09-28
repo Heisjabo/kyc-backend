@@ -1,44 +1,29 @@
-"""Reading places out of an address, and out of a page of text.
+"""Comparing an address with what a document says.
 
-Both sides of the address check go through here, so a claimed address and a
-utility bill are reduced the same way before they are compared. What comes out is
-a set of places at three levels: street, city, country.
+The comparison is **direct**: the address the client gave us has to appear on the
+document as it was written. Case, spacing and punctuation are ignored, because
+those are how text was printed rather than what it says, and the document's lines
+are joined before searching so an address broken across two lines still reads as
+one. Nothing else is forgiven: no abbreviations folded together, no street code
+taken to mean the city it sits in, no partial credit for sharing a word.
 
-The expansion is what makes the comparison work in practice. "KG 586 St" names no
-city, but its prefix says Kigali; "Kigali" names no country, but it is in Rwanda.
-Without that, an address and a bill that plainly describe the same place would
-share no text at all.
+So "Kigali, Rwanda" is not matched by a bill that prints "KG 333 St", and not by
+one that prints "Kigali City" either. If the two do not say the same thing, the
+check fails and a person is told which address we were given.
 """
 
 import re
 import unicodedata
-from dataclasses import dataclass, field
 
 from app.rules import address as rules
-from app.rules import places
-
-
-@dataclass
-class Places:
-    """The places one piece of text names, once reduced."""
-
-    streets: set[str] = field(default_factory=set)
-    cities: set[str] = field(default_factory=set)
-    countries: set[str] = field(default_factory=set)
-
-    def is_empty(self) -> bool:
-        return not (self.streets or self.cities or self.countries)
-
-    def at(self, level: str) -> set[str]:
-        return {
-            places.LEVEL_STREET: self.streets,
-            places.LEVEL_CITY: self.cities,
-            places.LEVEL_COUNTRY: self.countries,
-        }[level]
 
 
 def normalise(text: str) -> str:
-    """Lower case, no accents, no punctuation, single spaces."""
+    """Lower case, no accents, no punctuation, single spaces.
+
+    This is the only thing forgiven, and it is not a difference in the address: it
+    is a difference in how the address was typed or printed.
+    """
     ascii_text = unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode()
     return re.sub(r"\s+", " ", re.sub(r"[^A-Za-z0-9]+", " ", ascii_text)).strip().lower()
 
@@ -48,60 +33,16 @@ def is_po_box(text: str) -> bool:
     return any(word.replace(" ", "").replace(".", "") in flat for word in rules.PO_BOX_WORDS)
 
 
-def street_codes(text: str) -> set[str]:
-    """Rwandan street codes: KG 586 St, KK 15 Ave, and the unspaced KG586."""
-    found = set()
-    for prefix, number in re.findall(r"\b(kg|kk|kn)\s?(\d{1,4})\b", normalise(text)):
-        found.add(f"{prefix} {number}")
-    return found
+def document_text(lines: list[str]) -> str:
+    """Every line of the document as one normalised string.
 
-
-def read_places(text: str) -> Places:
-    """Everything `text` says about where somebody is, expanded.
-
-    Works on one address line and on a whole page of OCR text alike: the bill is
-    just a longer piece of text with more places in it.
+    Joined, because an address is routinely printed across two or three lines and
+    a line break is not a difference in the address.
     """
-    flat = normalise(text)
-    found = Places()
+    return normalise(" ".join(lines))
 
-    for code in street_codes(flat):
-        found.streets.add(code)
-        city, country = places.STREET_CODE_CITIES[code.split()[0]]
-        found.cities.add(city)
-        found.countries.add(country)
 
-    # Multi-word countries ("united states", "south africa") before single tokens,
-    # so "united states of america" is one country and not three unknown words.
-    for alias, country in places.COUNTRY_ALIASES.items():
-        if " " in alias and alias in flat:
-            found.countries.add(country)
-
-    tokens = [token for token in flat.split() if token not in rules.FILLER_WORDS]
-    for token in tokens:
-        if token in places.COUNTRY_ALIASES:
-            found.countries.add(places.COUNTRY_ALIASES[token])
-            continue
-        if token in places.CITY_REGIONS:
-            found.cities.add(token)
-            # A district sits inside a city, which sits inside a country. Each
-            # parent goes to the level it belongs to: Kicukiro is in Kigali, and
-            # Kigali is not a country.
-            for parent in places.CITY_REGIONS[token]:
-                if parent in places.COUNTRY_ALIASES:
-                    found.countries.add(places.COUNTRY_ALIASES[parent])
-                else:
-                    found.cities.add(parent)
-            continue
-        if token in places.US_STATES:
-            found.cities.add(token)
-            found.countries.add("united states")
-            continue
-        if len(token) >= rules.MIN_TOKEN_LENGTH and not token.isdigit():
-            # An unrecognised word long enough to be a place name: a street, a
-            # sector, a town nobody has put in the table yet.
-            found.streets.add(token)
-
-    # Anything that turned out to be a city is not also a street name.
-    found.streets -= found.cities
-    return found
+def address_on_document(claimed: str, lines: list[str]) -> bool:
+    """Does the document say this address, as it was given to us?"""
+    wanted = normalise(claimed)
+    return bool(wanted) and wanted in document_text(lines)

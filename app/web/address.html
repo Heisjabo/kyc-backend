@@ -27,8 +27,9 @@ ul.reasons { margin: 8px 0 0; padding-left: 18px; color: var(--muted); }
 <body>
 <main>
   <h1>Proof of address</h1>
-  <p class="lead">Upload a bill, statement or tenancy agreement that shows your address. A PDF from your
-     bank is fine, so is a photograph. It has to be from the last 90 days and in your own name.</p>
+  <p class="lead">Upload a bill, statement or tenancy agreement showing your address. A PDF from your bank
+     is fine, so is a photograph. It has to be from the last 90 days, in your own name, and the
+     address on it has to be written the same way it was given to us.</p>
 
   <form id="form">
     <label>What are you uploading?
@@ -71,7 +72,7 @@ const TOKEN = (location.pathname.match(/^\/verify\/([^/]+)/) || [])[1];
 
 const WORDING = {
   PO_BOX_NOT_ACCEPTED: 'a PO box cannot be used as an address',
-  ADDRESS_NOT_ON_DOCUMENT: 'this document does not show the address on your verification',
+  ADDRESS_MISMATCH: 'the address on this document is not written the same way as the one on your verification',
   NAME_NOT_ON_ADDRESS_PROOF: 'the document is not in your name',
   PROOF_TOO_OLD: 'the document is older than 90 days',
   PROOF_DATE_NOT_FOUND: 'no date could be read on the document',
@@ -81,7 +82,6 @@ const WORDING = {
   IMAGE_BLURRY: 'the photograph is blurred',
   IMAGE_TOO_DARK: 'the photograph is too dark',
   IMAGE_LOW_RESOLUTION: 'the photograph is too small to read',
-  ADDRESS_MATCHED_ON_COUNTRY_ONLY: 'only the country matched, not the street or city',
   AUTHENTICITY_NOT_CHECKED: 'the document was not checked for tampering',
   OWNER_NOT_VERIFIED: 'your name has not been proved yet, so it could not be matched',
 };
@@ -158,8 +158,8 @@ function show(result) {
   el('verdict').className = 'verdict ' + result.decision;
   el('verdict').textContent = VERDICTS[result.decision] || result.decision;
 
-  const level = result.extracted && result.extracted.matched_level;
-  el('matched').textContent = level ? `Matched on the ${level}.` : '';
+  const found = result.extracted && result.extracted.address_found;
+  el('matched').textContent = found ? 'The address on it matches.' : '';
 
   el('reasons').innerHTML = '';
   for (const code of [...result.reasons, ...result.warnings]) {

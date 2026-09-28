@@ -342,9 +342,21 @@ def submit_address(
 ) -> AddressCheckResponse:
     """Check a proof of address against the address the client gave us.
 
-    Uploaded, not captured: a bill or a statement is a file somebody already has,
-    or a photograph they took before they got here, and there is nothing for a
-    camera guide to help with.
+    **The address must be written on the document exactly as it was given to us.**
+    The comparison is direct: differences are not tolerated. Case, spacing and
+    punctuation are ignored, because those are how the text was printed rather than
+    what it says, and the document's lines are joined first so an address printed
+    across two lines still reads as one. Nothing else is forgiven: an abbreviation
+    is not the word it stands for, and a street code is not the city it sits in.
+
+    So a verification opened with `Kigali, Rwanda` **fails** against a utility bill
+    that prints `KG 333 St`, with `ADDRESS_MISMATCH`. It is a failure, not a review:
+    the two do not say the same address. The same bill against a verification
+    opened with `KG 333 St` passes.
+
+    Accepts a PDF as well as a photograph or a scan, because most bank statements
+    only exist as a PDF. Uploaded, not captured: there is nothing for a camera
+    guide to help with.
 
     The address comes from the verification, never from this request, and the name
     looked for is the one the document step proved. So the person can choose which

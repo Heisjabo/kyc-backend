@@ -490,38 +490,31 @@ map ours onto it line for line:
 | `address_document_expiration` | Document Expiration |
 | `address_document_authenticity` | Address Document Authenticity |
 
-### Matching an address to a document
+### Comparing the address
 
-An address and a bill rarely name a place at the same level. Somebody claims
-"Kigali, Rwanda" and their electricity bill prints "KG 586 St", or "Kigali City",
-or nothing above the street. So both sides go through the same reduction
-(`app/engines/addresses.py`) and are compared as sets of places:
+**The address has to be written on the document exactly as it was given to us.**
+Case, spacing and punctuation are ignored, because those are how text was printed
+rather than what it says, and the document's lines are joined before searching so
+an address printed across two lines still reads as one. Nothing else is forgiven:
+an abbreviation is not the word it stands for, and a street code is not the city
+it sits in.
 
-1. normalise: lower case, no accents, no punctuation, `st`/`street` and
-   `ave`/`avenue` folded together, filler words dropped
-2. expand: a `KG`, `KK` or `KN` street code implies Kigali and Rwanda, since those
-   are Kigali's three districts; a known city implies its country; a US state
-   implies the United States
-3. compare at street, then city, then country, and pass on the first level that
-   shares a place
-
-| claimed | on the document | result |
+| claimed at initiation | on the document | result |
 |---|---|---|
-| Kigali, Rwanda | Kigali City | pass, matched on the city |
-| Kigali, Rwanda | KG 580 St | pass, matched on the city (`KG` is Kigali) |
-| Kigali, Rwanda | Musanze | pass, matched on the country, with a warning |
-| Kigali, Rwanda | Nairobi, Kenya | fail |
+| KG 586 St, Kigali City | KG 586 ST, KIGALI CITY | pass |
+| KG 586 St, Kigali City | `KG 586 St` / `Kigali City` on two lines | pass |
+| Kigali, Rwanda | KG 333 St | **fail**, `ADDRESS_MISMATCH` |
+| Kigali, Rwanda | Kigali City | **fail**, `ADDRESS_MISMATCH` |
+| KG 586 Street, Kigali | KG 586 St, Kigali | **fail**, `ADDRESS_MISMATCH` |
+| KG 586 St, Kigali City | KG 12 St, Kigali City | **fail**, `ADDRESS_MISMATCH` |
 
-It is pass or fail, with no partial match: a check that asks a person to decide
-every time an address is written differently is a check nobody runs. The **level
-that matched is recorded**, because matching on a country alone is thin evidence:
-it says a Rwandan bill cleared a Rwandan address, and that belongs in the record
-rather than behind the word "pass".
+Pass or fail, never review, and no partial credit. A check that asks a person to
+decide whenever two addresses are written differently is a check nobody runs.
 
-The place tables live in `app/rules/places.py`, seeded from what is actually in
-tuesday-backend's user addresses: US street addresses, Kenyan addresses, PO boxes,
-Rwandan districts and sectors, and a handful of Kigali street codes. Adding a
-place is one line.
+What this asks of a client: send the address the way it appears on the documents
+their customers actually hold. An address stored as "Kigali" will not pass against
+anything, and that is the client's data to fix rather than something for the
+matcher to guess at.
 
 A **PO box fails** (`PO_BOX_NOT_ACCEPTED`), before anything is read, because our
 Shufti request says `po_box: false` and a mailbox is not somewhere anybody lives.
