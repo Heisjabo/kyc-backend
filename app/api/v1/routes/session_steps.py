@@ -40,6 +40,7 @@ from app.pipeline.address import scan_address_proof
 from app.pipeline.document import scan_document
 from app.pipeline.face_match import match_faces
 from app.pipeline.liveness import check_liveness
+from app.rules import address as address_rules
 from app.rules import document as document_rules
 from app.rules import face as face_rules
 from app.schemas.address import AddressCheckResponse, ProofType
@@ -96,6 +97,21 @@ def _read(upload: UploadFile, field: str) -> bytes:
         raise HTTPException(
             status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
             f"{field} must be one of: {', '.join(sorted(document_rules.ALLOWED_CONTENT_TYPES))}",
+        )
+    data = upload.file.read(document_rules.MAX_UPLOAD_BYTES + 1)
+    if len(data) > document_rules.MAX_UPLOAD_BYTES:
+        raise HTTPException(status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, f"{field} is larger than 10 MB")
+    if not data:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, f"{field} is empty")
+    return data
+
+
+def _read_proof(upload: UploadFile, field: str) -> bytes:
+    """The same as _read, plus PDFs: most bank statements only exist as one."""
+    if upload.content_type not in address_rules.ALLOWED_CONTENT_TYPES:
+        raise HTTPException(
+            status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            f"{field} must be one of: {', '.join(sorted(address_rules.ALLOWED_CONTENT_TYPES))}",
         )
     data = upload.file.read(document_rules.MAX_UPLOAD_BYTES + 1)
     if len(data) > document_rules.MAX_UPLOAD_BYTES:
@@ -320,8 +336,8 @@ def submit_address(
     token: str,
     request: Request,
     document_type: ProofType = Form(..., description="The kind of proof being uploaded"),
-    proof: UploadFile = File(..., description="Photo or scan of the bill, statement or agreement"),
-    back: UploadFile | None = File(None, description="Second page, when the proof has one"),
+    proof: UploadFile = File(..., description="The bill, statement or agreement: an image or a PDF"),
+    back: UploadFile | None = File(None, description="Second file, when the proof is in two"),
     db: Session = Depends(get_session),
 ) -> AddressCheckResponse:
     """Check a proof of address against the address the client gave us.
@@ -346,8 +362,8 @@ def submit_address(
             "This verification was created without an address, so there is nothing to check against",
         )
 
-    front_bytes = _read(proof, "proof")
-    back_bytes = _read(back, "back") if back else None
+    front_bytes = _read_proof(proof, "proof")
+    back_bytes = _read_proof(back, "back") if back else None
 
     step = service.open_step(db, verification, VerificationStep.address)
     step.device = _device(request)

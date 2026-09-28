@@ -31,6 +31,20 @@ TYPE_WORDS = {
     ),
 }
 
+# Uploads. A PDF is accepted because most bank statements only exist as one, and
+# it is the one proof type nobody photographs.
+ALLOWED_CONTENT_TYPES = {"image/jpeg", "image/png", "image/webp", "application/pdf"}
+
+# How many pages of a PDF are read. A statement's address is on the first page;
+# this is enough for a covering page in front of it without reading somebody's
+# whole year of transactions.
+PDF_MAX_PAGES = 3
+
+# Rendering scale for a PDF with no text in it, where pdfium's 1.0 is 72 dpi. 2.8
+# puts the print at about 200 dpi, which is the resolution the OCR reads
+# photographs of documents at.
+PDF_RENDER_SCALE = 2.8
+
 # How many lines of text a page has to give up before it is worth judging. A bill
 # or a statement is a page of print; anything less than this is a photograph of
 # something else, or a photograph too poor to read.

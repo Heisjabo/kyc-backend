@@ -1,7 +1,8 @@
 """Address proof pipeline.
 
-decode -> quality -> OCR -> is it the kind of proof they said -> is the address on
-it -> does it belong to the same person -> is it recent enough -> decision
+read (a photograph, or a PDF's own text, or a rendered PDF) -> quality -> is it the
+kind of proof they said -> is the address on it -> does it belong to the same
+person -> is it recent enough -> decision
 
 The checks are named as Shufti names them in its verification report, so a client
 holding one of their reports can map ours onto it line for line:
@@ -27,6 +28,7 @@ from app.engines.addresses import Places, is_po_box, normalise, read_places
 from app.engines.fields import find_dates
 from app.engines.image import InvalidImageError, decode_image
 from app.engines.ocr import read_document
+from app.engines.pdf import is_pdf, render_pages, text_lines
 from app.engines.quality import assess_quality
 from app.pipeline.document import names_on_document
 from app.rules import address as rules
@@ -76,24 +78,17 @@ def scan_address_proof(
         )
         return finish()
 
-    images = {}
-    for side, data in (("front", front), ("back", back)):
-        if data is None:
-            continue
-        try:
-            images[side] = decode_image(data)
-        except InvalidImageError:
-            checks.append(
-                CheckResult(
-                    name="address_document_proof",
-                    status=CheckStatus.failed,
-                    reasons=["IMAGE_UNREADABLE"],
-                )
+    try:
+        lines, qualities, sides = _read_proof(front, back)
+    except UnreadableProof as unreadable:
+        checks.append(
+            CheckResult(
+                name="address_document_proof",
+                status=CheckStatus.failed,
+                reasons=[unreadable.reason],
             )
-            return finish()
-
-    qualities = {side: assess_quality(image) for side, image in images.items()}
-    lines = [line.text for side in images for line in read_document(images[side])]
+        )
+        return finish()
 
     # Is there a document here at all? A bill is a page of print, so the test is
     # whether enough text came back to read an address off.
@@ -103,7 +98,7 @@ def scan_address_proof(
             name="address_document_proof",
             status=CheckStatus.passed if readable else CheckStatus.failed,
             reasons=[] if readable else ["PROOF_NOT_READABLE"],
-            details={"text_lines": len(lines), "sides": sorted(images)},
+            details={"text_lines": len(lines), "read": sides},
         )
     )
     for side, quality in qualities.items():
@@ -131,6 +126,57 @@ def scan_address_proof(
         )
     )
     return finish()
+
+
+class UnreadableProof(Exception):
+    """Nothing could be opened, so there is no document to judge."""
+
+    def __init__(self, reason: str):
+        super().__init__(reason)
+        self.reason = reason
+
+
+def _read_proof(front: bytes, back: bytes | None) -> tuple[list[str], dict, list[str]]:
+    """The text on the proof, the quality of each photograph, and what was read.
+
+    A PDF is read from its own text layer when it has one, which a bank's own
+    statement does, and rendered and OCRed when it does not, which a scan does not.
+    Quality is only measured on photographs: blur and glare mean nothing on a page
+    a computer drew, and refusing a perfectly clean PDF for lacking contrast would
+    be nonsense.
+    """
+    lines: list[str] = []
+    qualities: dict = {}
+    read: list[str] = []
+
+    for side, data in (("front", front), ("back", back)):
+        if data is None:
+            continue
+
+        if is_pdf(data):
+            inside = text_lines(data)
+            if len(inside) >= rules.MIN_TEXT_LINES:
+                lines.extend(inside)
+                read.append(f"{side}: pdf text")
+                continue
+            # A scan wrapped in a PDF: every page becomes a picture to read.
+            pages = render_pages(data)
+            if not pages:
+                raise UnreadableProof("PROOF_NOT_READABLE")
+            for page in pages:
+                lines.extend(line.text for line in read_document(page))
+            read.append(f"{side}: pdf rendered, {len(pages)} page(s)")
+            continue
+
+        try:
+            image = decode_image(data)
+        except InvalidImageError:
+            raise UnreadableProof("IMAGE_UNREADABLE") from None
+        qualities[side] = assess_quality(image)
+        lines.extend(line.text for line in read_document(image))
+        read.append(f"{side}: photograph")
+
+    return lines, qualities, read
 
 
 def _decide(checks: list[CheckResult]) -> Decision:

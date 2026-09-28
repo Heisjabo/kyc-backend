@@ -27,8 +27,8 @@ ul.reasons { margin: 8px 0 0; padding-left: 18px; color: var(--muted); }
 <body>
 <main>
   <h1>Proof of address</h1>
-  <p class="lead">Upload a bill, statement or tenancy agreement that shows your address. It has to be
-     from the last 90 days and in your own name.</p>
+  <p class="lead">Upload a bill, statement or tenancy agreement that shows your address. A PDF from your
+     bank is fine, so is a photograph. It has to be from the last 90 days and in your own name.</p>
 
   <form id="form">
     <label>What are you uploading?
@@ -42,13 +42,14 @@ ul.reasons { margin: 8px 0 0; padding-left: 18px; color: var(--muted); }
 
     <div class="drop" id="drop">
       <strong>Choose a file, or drop one here</strong>
-      <small>A photograph or a scan. JPEG, PNG or WebP, up to 10 MB.</small>
-      <input type="file" id="file" accept="image/jpeg,image/png,image/webp" hidden>
+      <small>A PDF, a photograph or a scan. Up to 10 MB.</small>
+      <input type="file" id="file" accept="image/jpeg,image/png,image/webp,application/pdf" hidden>
     </div>
 
     <div class="chosen" id="chosen">
       <h2>What you are sending</h2>
       <img id="preview" alt="The proof you chose">
+      <p id="pdf-name" class="muted" hidden></p>
     </div>
 
     <button type="submit" id="send" disabled>Send it</button>
@@ -75,7 +76,7 @@ const WORDING = {
   PROOF_TOO_OLD: 'the document is older than 90 days',
   PROOF_DATE_NOT_FOUND: 'no date could be read on the document',
   PROOF_TYPE_MISMATCH: 'this does not read like the kind of document you chose',
-  PROOF_NOT_READABLE: 'not enough text could be read, try a clearer photograph',
+  PROOF_NOT_READABLE: 'not enough text could be read from that file, try a clearer copy',
   IMAGE_UNREADABLE: 'the file could not be opened as an image',
   IMAGE_BLURRY: 'the photograph is blurred',
   IMAGE_TOO_DARK: 'the photograph is too dark',
@@ -108,7 +109,16 @@ function take(file) {
   if (!file) return;
   chosen = file;
   el('send').disabled = false;
-  el('preview').src = URL.createObjectURL(file);
+
+  // A PDF has no picture for an <img> to show, so the name stands in for it.
+  const isPdf = file.type === 'application/pdf' || /\.pdf$/i.test(file.name);
+  el('preview').hidden = isPdf;
+  el('pdf-name').hidden = !isPdf;
+  if (isPdf) {
+    el('pdf-name').textContent = file.name;
+  } else {
+    el('preview').src = URL.createObjectURL(file);
+  }
   el('chosen').classList.add('shown');
   el('status').textContent = file.name;
 }

@@ -9,12 +9,14 @@ judgement this step turns on, which is whether an address and a document name th
 same place when they spell it differently.
 """
 
+import io
 import uuid
 from datetime import date, timedelta
 
 import cv2
 import numpy as np
 import pytest
+from PIL import Image
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, select, text
 from sqlalchemy.orm import sessionmaker
@@ -99,6 +101,58 @@ def utility_bill(place="KIGALI CITY", name="JEAN MUGISHA", issued=None) -> bytes
         "Date: " + issued.strftime("%d-%m-%Y"),
         "Amount due: RWF 12,400",
     )
+
+
+def scanned_pdf(*lines: str) -> bytes:
+    """A photograph or scan wrapped in a PDF: no text inside it, only a picture.
+
+    Built by drawing the page and letting PIL save it as a PDF, which is exactly
+    what a phone scanner app produces.
+    """
+    image = cv2.imdecode(np.frombuffer(bill(*lines), np.uint8), cv2.IMREAD_COLOR)
+    out = io.BytesIO()
+    Image.fromarray(image[:, :, ::-1]).save(out, format="PDF")
+    return out.getvalue()
+
+
+def digital_pdf(*lines: str) -> bytes:
+    """A PDF with its text inside it, the way a bank generates a statement.
+
+    Written by hand rather than with a library, because what is under test is that
+    the text layer is read instead of the page being rendered and guessed at.
+    """
+    content = "BT /F1 14 Tf 40 780 Td 16 TL\n"
+    for line in lines:
+        escaped = line.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
+        content += f"({escaped}) Tj T*\n"
+    content += "ET"
+    stream = content.encode()
+
+    objects = [
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] "
+        b"/Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>",
+        b"<< /Length " + str(len(stream)).encode() + b" >>\nstream\n" + stream + b"\nendstream",
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+    ]
+
+    out = bytearray(b"%PDF-1.4\n")
+    offsets = []
+    for number, body in enumerate(objects, start=1):
+        offsets.append(len(out))
+        out += f"{number} 0 obj\n".encode() + body + b"\nendobj\n"
+
+    start = len(out)
+    out += f"xref\n0 {len(objects) + 1}\n".encode()
+    out += b"0000000000 65535 f \n"
+    for offset in offsets:
+        out += f"{offset:010d} 00000 n \n".encode()
+    out += (
+        f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>\nstartxref\n{start}\n".encode()
+        + b"%%EOF\n"
+    )
+    return bytes(out)
 
 
 def scan(proof, claimed="Kigali, Rwanda", names=("Jean", "Mugisha"), proof_type=ProofType.utility_bill):
@@ -217,6 +271,71 @@ def test_a_page_with_nothing_on_it_asks_for_another_photograph():
     result = scan(bill("BILL"))
     assert result.decision == Decision.retake
     assert "PROOF_NOT_READABLE" in result.reasons
+
+
+def test_a_pdf_statement_is_read_from_its_own_text(monkeypatch):
+    """A bank's own PDF carries its words inside it, which is both quicker and more
+    accurate than rendering the page and guessing at the print."""
+    from app.pipeline import address as pipeline
+
+    def no_ocr(image):
+        raise AssertionError("the text layer should have been enough")
+
+    monkeypatch.setattr(pipeline, "read_document", no_ocr)
+
+    proof = digital_pdf(
+        "BANK OF KIGALI",
+        "ACCOUNT STATEMENT",
+        "Account holder: JEAN MUGISHA",
+        "Address: KG 586 St, Kigali City",
+        "Opening balance: 120,000",
+        "Closing balance: 98,400",
+        "Date: " + (date.today() - timedelta(days=7)).strftime("%d-%m-%Y"),
+    )
+    result = scan(proof, proof_type=ProofType.bank_statement)
+    assert result.decision == Decision.passed
+    assert result.extracted.matched_level in ("street", "city")
+    assert any("pdf text" in str(check.details.get("read", "")) for check in result.checks)
+
+
+def test_a_scan_wrapped_in_a_pdf_is_rendered_and_read():
+    """What a phone scanner app produces: a picture in a PDF, no text inside it.
+    That has to be rendered and read like any other photograph."""
+    proof = scanned_pdf(
+        "REG ELECTRICITY BILL",
+        "Customer: JEAN MUGISHA",
+        "Address: KIGALI CITY",
+        "Meter number: 37200145",
+        "Units: 45 kWh",
+        "Date: " + (date.today() - timedelta(days=12)).strftime("%d-%m-%Y"),
+        "Amount due: RWF 12,400",
+    )
+    result = scan(proof)
+    assert result.decision == Decision.passed
+    assert any("pdf rendered" in str(check.details.get("read", "")) for check in result.checks)
+
+
+def test_a_pdf_is_recognised_by_what_is_in_it_not_what_it_was_called():
+    from app.engines.pdf import is_pdf
+
+    assert is_pdf(digital_pdf("HELLO"))
+    assert is_pdf(scanned_pdf("HELLO"))
+    assert not is_pdf(utility_bill())
+
+
+def test_quality_is_not_judged_on_a_pdf():
+    """Blur and glare mean nothing on a page a computer drew, so refusing a clean
+    PDF for lacking contrast would be nonsense."""
+    result = scan(digital_pdf(
+        "REG ELECTRICITY BILL",
+        "Customer: JEAN MUGISHA",
+        "Address: KIGALI CITY",
+        "Meter number: 37200145",
+        "Units: 45 kWh",
+        "Date: " + (date.today() - timedelta(days=3)).strftime("%d-%m-%Y"),
+    ))
+    assert result.decision == Decision.passed
+    assert not [check for check in result.checks if check.name.startswith("quality_")]
 
 
 def test_authenticity_is_reported_as_not_checked_never_as_passed():
@@ -387,6 +506,44 @@ def test_the_name_looked_for_is_the_one_the_document_proved(client, api_key, mon
     body = submit_address(client, token, proof=utility_bill(name="ALICE MUKAMANA")).json()
     assert body["decision"] == "fail"
     assert "NAME_NOT_ON_ADDRESS_PROOF" in body["reasons"]
+
+
+@needs_db
+def test_a_pdf_is_accepted_and_kept_as_a_pdf(client, api_key, monkeypatch, db_session):
+    opened, token = pass_document(client, api_key, monkeypatch)
+    proof = digital_pdf(
+        "BANK OF KIGALI",
+        "ACCOUNT STATEMENT",
+        "Account holder: JEAN MUGISHA",
+        "Address: KG 586 St, Kigali City",
+        "Closing balance: 98,400",
+        "Date: " + (date.today() - timedelta(days=4)).strftime("%d-%m-%Y"),
+    )
+    response = client.post(
+        f"/v1/sessions/{token}/address",
+        data={"document_type": "bank_statement"},
+        files={"proof": ("statement.pdf", proof, "application/pdf")},
+    )
+    assert response.json()["decision"] == "pass"
+
+    kept = db_session.scalars(
+        select(VerificationFile).where(VerificationFile.kind == FileKind.address_proof)
+    ).one()
+    # The original file is what is kept, not a picture made from it.
+    assert kept.content_type == "application/pdf"
+
+
+@needs_db
+def test_a_file_that_is_neither_an_image_nor_a_pdf_is_refused(client, api_key, monkeypatch):
+    opened, token = pass_document(client, api_key, monkeypatch)
+    response = client.post(
+        f"/v1/sessions/{token}/address",
+        data={"document_type": "utility_bill"},
+        files={"proof": ("bill.docx", b"PK\x03\x04 not a document we read",
+                         "application/vnd.openxmlformats-officedocument.wordprocessingml.document")},
+    )
+    assert response.status_code == 415
+    assert "application/pdf" in response.text
 
 
 @needs_db
