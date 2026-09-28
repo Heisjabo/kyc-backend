@@ -47,8 +47,25 @@ uvicorn app.main:app --reload --port 8000
 ## Deployment
 
 A push to `main` deploys, through `.github/workflows/build.yml` on the
-**self-hosted `prod` runner**, the same shape tuesday-backend uses: write `.env`
-from the repository's secrets, then `docker compose up --build -d`.
+**self-hosted `prod` runner**: the runner checks the repository out on the server,
+writes `.env` from the repository's secrets, and runs `docker compose up --build
+-d`, so the image is built on the machine from that checkout. That checkout is the
+only reason the server talks to GitHub at all.
+
+It uses the workflow's own `GITHUB_TOKEN`, not a personal access token, and nothing
+writes credentials into a git URL. One thing on this runner has to be worked
+around: its `/root/.gitconfig` contains
+
+```
+url."https://<token>@github.com/".insteadOf "https://github.com/"
+```
+
+written by another repository's deploy with `git config --global`, and the runner
+copies that file into every job. It rewrites this checkout's URL into one carrying
+a username and no password, which fails as `could not read Password for
+'https://***@github.com'`. The job points `GIT_CONFIG_GLOBAL` at an empty file in
+its own temp directory, so git ignores that config here without anything being
+changed on the machine. The real fix belongs in the workflow that writes there.
 
 **The container answers on 4500 on the host**, 8000 inside. Point the domain at
 4500. These ports were already taken on that machine and are left alone: 3000,
@@ -75,7 +92,6 @@ docker compose exec kyc-api alembic upgrade head
 
 | | |
 |---|---|
-| `PAT_TOKEN` | the checkout and pull token, as in tuesday-backend |
 | `DATABASE_URL` | `postgresql+psycopg://user:pass@host:5432/kyc` |
 | `REDIS_URL` | |
 | `JWT_SECRET` | long and random. The service refuses to start outside development with the published default |

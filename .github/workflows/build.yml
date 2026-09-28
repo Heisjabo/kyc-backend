@@ -8,17 +8,26 @@ on:
 jobs:
   deploy:
     runs-on: [self-hosted, prod]
+    env:
+      # This runner's /root/.gitconfig carries
+      #   url."https://<token>@github.com/".insteadOf "https://github.com/"
+      # written by another repository's deploy with `git config --global`, and the
+      # runner copies that file into every job. The rewrite turns this checkout's
+      # URL into one with a username and no password, which is exactly
+      #   fatal: could not read Password for 'https://***@github.com'
+      #
+      # Pointing GIT_CONFIG_GLOBAL at an empty file in this job's own temp makes
+      # git ignore that file for the whole job, without editing anything on the
+      # machine: the fix for the machine belongs in the workflow that writes there.
+      GIT_CONFIG_GLOBAL: ${{ runner.temp }}/gitconfig-for-this-job
     steps:
+      - name: Start from an empty git config
+        run: ': > "$GIT_CONFIG_GLOBAL"'
+
+      # No token: the workflow's own GITHUB_TOKEN checks this repository out, and
+      # nothing here needs another repository or a private dependency.
       - name: Checkout code
         uses: actions/checkout@v4
-        with:
-          token: ${{ secrets.PAT_TOKEN }}
-          persist-credentials: true
-          fetch-depth: 0
-
-      - name: Configure Git Authentication
-        run: |
-          git config --global url."https://${{ secrets.PAT_TOKEN }}@github.com/".insteadOf "https://github.com/"
 
       # Every value the service reads lives here. Anything added to
       # app/core/config.py that a deployment has to set has to be added to this
@@ -85,14 +94,14 @@ jobs:
           echo "5838f7fe053675b1c7a08b633df49e7af5495cee0493c7dcf6697200b85b5b91  models/det_10g.onnx" | sha256sum -c -
           echo "4c06341c33c2ca1f86781dab0e829f88ad5b64be9fba56e56bc9ebdefc619e43  models/w600k_r50.onnx" | sha256sum -c -
 
+      # No remote rewriting and no pull: the checkout above already put this
+      # commit in the workspace, and the workspace is wiped and re-fetched on
+      # every run. Pulling again would only be a way of deploying something other
+      # than what triggered the deploy.
       - name: Deploy
-        env:
-          GH_TOKEN: ${{ secrets.PAT_TOKEN }}
         run: |
           set -e
           mkdir -p var/evidence
-          git remote set-url origin https://${{ secrets.PAT_TOKEN }}@github.com/${{ github.repository }}.git
-          git pull origin main
           docker compose up --build -d
           # Dangling images only. A full `docker system prune -af` would throw away
           # the build cache, and this image installs TensorFlow and compiles
