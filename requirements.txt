@@ -10,6 +10,15 @@ psycopg[binary]==3.*
 
 # Accounts and API keys. Argon2id for passwords (the OWASP recommendation),
 # PyJWT for dashboard sessions.
+# Proof of address as a PDF, which is the only form most bank statements come in.
+# pypdfium2 is BSD/Apache and ships its own binary; PyMuPDF would be AGPL.
+pypdfium2==5.*
+
+# The QR on the session page, drawn here rather than by a third party: the session
+# token is the whole credential, and it is not going in somebody else's query
+# string. Pure Python, no dependencies of its own.
+segno==1.6.*
+
 # Evidence on Google Drive: a service account uploads and reads it back, and
 # nothing is ever shared from there. See app/storage/drive.py.
 google-api-python-client==2.*

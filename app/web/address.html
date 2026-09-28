@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Proof of address</title>
+<link rel="stylesheet" href="/static/style.css">
+<style>
+/* Upload, not capture: a bill is a file somebody already has, or a photograph
+   they took before they got here, so there is no camera and no guide frame. */
+.drop { display: grid; gap: 10px; place-items: center; padding: 28px 16px; border: 1px dashed var(--line);
+        border-radius: 12px; background: var(--panel); text-align: center; cursor: pointer; }
+.drop.over { border-color: var(--accent); }
+.drop small { color: var(--muted); }
+.chosen { display: none; margin-top: 12px; }
+.chosen.shown { display: block; }
+.chosen img { max-width: 100%; border-radius: 10px; border: 1px solid var(--line); }
+.result { display: none; margin-top: 18px; }
+.result.shown { display: block; }
+.verdict { font-weight: 700; }
+.verdict.pass { color: var(--pass); }
+.verdict.review { color: var(--review); }
+.verdict.fail, .verdict.retake { color: var(--fail); }
+ul.reasons { margin: 8px 0 0; padding-left: 18px; color: var(--muted); }
+</style>
+</head>
+<body>
+<main>
+  <h1>Proof of address</h1>
+  <p class="lead">Upload a bill, statement or tenancy agreement showing your address. A PDF from your bank
+     is fine, so is a photograph. It has to be from the last 90 days, in your own name, and the
+     address on it has to be written the same way it was given to us.</p>
+
+  <form id="form">
+    <label>What are you uploading?
+      <select id="document-type">
+        <option value="utility_bill">Utility bill (electricity, water, gas)</option>
+        <option value="bank_statement">Bank statement</option>
+        <option value="credit_card_statement">Credit card statement</option>
+        <option value="rent_agreement">Tenancy or rent agreement</option>
+      </select>
+    </label>
+
+    <div class="drop" id="drop">
+      <strong>Choose a file, or drop one here</strong>
+      <small>A PDF, a photograph or a scan. Up to 10 MB.</small>
+      <input type="file" id="file" accept="image/jpeg,image/png,image/webp,application/pdf" hidden>
+    </div>
+
+    <div class="chosen" id="chosen">
+      <h2>What you are sending</h2>
+      <img id="preview" alt="The proof you chose">
+      <p id="pdf-name" class="muted" hidden></p>
+    </div>
+
+    <button type="submit" id="send" disabled>Send it</button>
+  </form>
+
+  <div id="status" class="status"></div>
+
+  <aside class="result" id="result">
+    <h2>Result</h2>
+    <p><span class="verdict" id="verdict"></span> <span id="matched" class="muted"></span></p>
+    <ul class="reasons" id="reasons"></ul>
+    <p><a class="button" id="next" href="#" hidden>Carry on</a></p>
+  </aside>
+</main>
+
+<script>
+const el = id => document.getElementById(id);
+const TOKEN = (location.pathname.match(/^\/verify\/([^/]+)/) || [])[1];
+
+const WORDING = {
+  PO_BOX_NOT_ACCEPTED: 'a PO box cannot be used as an address',
+  ADDRESS_MISMATCH: 'the address on this document is not written the same way as the one on your verification',
+  NAME_NOT_ON_ADDRESS_PROOF: 'the document is not in your name',
+  PROOF_TOO_OLD: 'the document is older than 90 days',
+  PROOF_DATE_NOT_FOUND: 'no date could be read on the document',
+  PROOF_TYPE_MISMATCH: 'this does not read like the kind of document you chose',
+  PROOF_NOT_READABLE: 'not enough text could be read from that file, try a clearer copy',
+  IMAGE_UNREADABLE: 'the file could not be opened as an image',
+  IMAGE_BLURRY: 'the photograph is blurred',
+  IMAGE_TOO_DARK: 'the photograph is too dark',
+  IMAGE_LOW_RESOLUTION: 'the photograph is too small to read',
+  AUTHENTICITY_NOT_CHECKED: 'the document was not checked for tampering',
+  OWNER_NOT_VERIFIED: 'your name has not been proved yet, so it could not be matched',
+};
+const VERDICTS = {
+  pass: 'Accepted.',
+  review: 'Sent for review.',
+  fail: 'Not accepted.',
+  retake: 'Try another photograph.',
+};
+
+let chosen = null;
+
+el('drop').addEventListener('click', () => el('file').click());
+el('file').addEventListener('change', event => take(event.target.files[0]));
+
+for (const name of ['dragenter', 'dragover']) {
+  el('drop').addEventListener(name, event => { event.preventDefault(); el('drop').classList.add('over'); });
+}
+for (const name of ['dragleave', 'drop']) {
+  el('drop').addEventListener(name, event => { event.preventDefault(); el('drop').classList.remove('over'); });
+}
+el('drop').addEventListener('drop', event => take(event.dataTransfer.files[0]));
+
+function take(file) {
+  if (!file) return;
+  chosen = file;
+  el('send').disabled = false;
+
+  // A PDF has no picture for an <img> to show, so the name stands in for it.
+  const isPdf = file.type === 'application/pdf' || /\.pdf$/i.test(file.name);
+  el('preview').hidden = isPdf;
+  el('pdf-name').hidden = !isPdf;
+  if (isPdf) {
+    el('pdf-name').textContent = file.name;
+  } else {
+    el('preview').src = URL.createObjectURL(file);
+  }
+  el('chosen').classList.add('shown');
+  el('status').textContent = file.name;
+}
+
+el('form').addEventListener('submit', async event => {
+  event.preventDefault();
+  if (!chosen) return;
+
+  el('send').disabled = true;
+  el('status').textContent = 'Reading the document...';
+
+  const body = new FormData();
+  body.append('document_type', el('document-type').value);
+  body.append('proof', chosen, chosen.name);
+
+  let response, result;
+  try {
+    response = await fetch(`/v1/sessions/${TOKEN}/address`, { method: 'POST', body });
+    result = await response.json();
+  } catch (error) {
+    el('status').textContent = error.message;
+    el('send').disabled = false;
+    return;
+  }
+
+  if (!response.ok) {
+    el('status').textContent = result.detail || 'That could not be checked.';
+    el('send').disabled = false;
+    return;
+  }
+
+  show(result);
+});
+
+function show(result) {
+  el('status').textContent = '';
+  el('verdict').className = 'verdict ' + result.decision;
+  el('verdict').textContent = VERDICTS[result.decision] || result.decision;
+
+  const found = result.extracted && result.extracted.address_found;
+  el('matched').textContent = found ? 'The address on it matches.' : '';
+
+  el('reasons').innerHTML = '';
+  for (const code of [...result.reasons, ...result.warnings]) {
+    const item = document.createElement('li');
+    item.textContent = WORDING[code] || code;
+    el('reasons').appendChild(item);
+  }
+  el('result').classList.add('shown');
+
+  // Settled one way or the other, the session page is where the next step is.
+  // Refused, they can choose another document and send again.
+  const settled = result.decision === 'pass' || result.decision === 'review';
+  el('next').href = `/verify/${TOKEN}`;
+  el('next').hidden = !settled;
+  el('send').hidden = settled;
+  el('send').disabled = settled;
+  el('send').textContent = 'Send another';
+}
+</script>
+</body>
+</html>

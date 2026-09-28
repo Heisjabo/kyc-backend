@@ -4,10 +4,11 @@ Not part of the service's API. They exist so the flow can be tried end to end in
 a browser before the real frontend is built.
 """
 
+import io
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, status
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi import APIRouter, HTTPException, Request, status
+from fastapi.responses import FileResponse, HTMLResponse, Response
 
 from app.storage import sessions
 
@@ -26,6 +27,7 @@ def scan_page() -> HTMLResponse:
 #   /verify/{token}            where you are, and what is next
 #   /verify/{token}/document   photograph your document
 #   /verify/{token}/face       prove you are here
+#   /verify/{token}/address    upload a bill showing where you live
 #
 # The token is unguessable and is the whole credential, which is what lets the
 # same link be scanned onto a phone and carried on there.
@@ -45,6 +47,38 @@ def session_document_page(token: str) -> HTMLResponse:
 def session_face_page(token: str) -> HTMLResponse:
     """The face step of a session."""
     return HTMLResponse((WEB_DIR / "verify.html").read_text())
+
+
+@router.get("/verify/{token}/address", response_class=HTMLResponse)
+def session_address_page(token: str) -> HTMLResponse:
+    """The address step of a session: an upload, not a capture."""
+    return HTMLResponse((WEB_DIR / "address.html").read_text())
+
+
+@router.get("/verify/{token}/qr.svg")
+def session_qr(token: str, request: Request) -> Response:
+    """The session link as a QR, so a person can carry on on their phone.
+
+    Drawn here, not by a QR service on the internet. The link contains the session
+    token, which is the whole credential for this verification: putting it in a
+    query string to somebody else's server hands them a working link, and it also
+    means no QR at all when that server is unreachable.
+
+    The host comes from the request, so the code points wherever the page was
+    reached from, a tunnel included. A QR of localhost is correct and useless: a
+    phone cannot reach the laptop it was drawn on.
+    """
+    import segno
+
+    link = f"{str(request.base_url).rstrip('/')}/verify/{token}"
+    out = io.BytesIO()
+    segno.make(link, error="m").save(out, kind="svg", scale=4, dark="#10131a", light="#ffffff")
+    return Response(
+        out.getvalue(),
+        media_type="image/svg+xml",
+        # It holds a credential, so it is not kept by a proxy or a browser cache.
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 @router.get("/capture", response_class=HTMLResponse)

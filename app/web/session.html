@@ -46,7 +46,7 @@ const token = location.pathname.split('/')[2];
 const WORDING = {
   document: ['Your document', 'A passport, national ID or driving licence'],
   face: ['Your face', 'A short check that you are really here'],
-  address: ['Your address', 'A bill or statement showing where you live'],
+  address: ['Your address', 'Upload a recent bill or statement in your name'],
   due_diligence: ['A few questions', 'Asked by the company checking you'],
   aml: ['Background check', 'Run by us, nothing for you to do'],
   consent: ['Your consent', 'Confirming you agree to be checked'],
@@ -54,6 +54,7 @@ const WORDING = {
 const PAGE = {
   document: `/verify/${token}/document`,
   face: `/verify/${token}/face`,
+  address: `/verify/${token}/address`,
 };
 
 async function load() {
@@ -108,13 +109,15 @@ async function load() {
   go.href = PAGE[session.next_step] || '#';
   go.textContent = session.completed_steps.length ? 'Continue' : 'Start';
 
-  // The QR is the same link. Both devices read one session, so whichever
-  // finishes a step, the other sees it on its next look.
-  if (session.next_step === 'document') {
-    qr.hidden = false;
-    document.getElementById('qr-image').src =
-      'https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=' + encodeURIComponent(location.href);
-  }
+  // The QR is the same link, drawn by us: the token in it is the credential for
+  // this verification and does not go to a QR service. Both devices read one
+  // session, so whichever finishes a step, the other sees it on its next look.
+  // Shown for every step a phone is better at, which is all of them: a camera for
+  // the document and the face, a photograph of a bill for the address.
+  qr.hidden = false;
+  const image = document.getElementById('qr-image');
+  const source = `/verify/${token}/qr.svg`;
+  if (!image.src.endsWith(source)) image.src = source;
 }
 
 load();
