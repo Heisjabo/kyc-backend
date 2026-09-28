@@ -1,0 +1,114 @@
+name: Deploy to VPS
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: [self-hosted, prod]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.PAT_TOKEN }}
+          persist-credentials: true
+          fetch-depth: 0
+
+      - name: Configure Git Authentication
+        run: |
+          git config --global url."https://${{ secrets.PAT_TOKEN }}@github.com/".insteadOf "https://github.com/"
+
+      # Every value the service reads lives here. Anything added to
+      # app/core/config.py that a deployment has to set has to be added to this
+      # list as well, or production runs on the default.
+      #
+      # The values are quoted, which matters for two of them: a service account
+      # private key and a whole JSON key both contain characters and newlines that
+      # would otherwise end the line early.
+      - name: Create .env from individual secrets
+        run: |
+          {
+            echo "ENVIRONMENT=${{ secrets.ENVIRONMENT }}";
+            echo "ENABLE_DOCS=${{ secrets.ENABLE_DOCS }}";
+
+            echo "DATABASE_URL=\"${{ secrets.DATABASE_URL }}\"";
+            echo "REDIS_URL=\"${{ secrets.REDIS_URL }}\"";
+            echo "JWT_SECRET=\"${{ secrets.JWT_SECRET }}\"";
+
+            echo "SESSION_TTL_MINUTES=${{ secrets.SESSION_TTL_MINUTES }}";
+            echo "MAX_SESSION_TTL_MINUTES=${{ secrets.MAX_SESSION_TTL_MINUTES }}";
+
+            echo "GOOGLE_SERVICE_ACCOUNT_EMAIL=\"${{ secrets.GOOGLE_SERVICE_ACCOUNT_EMAIL }}\"";
+            echo "GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY=\"${{ secrets.GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY }}\"";
+            echo "GOOGLE_SERVICE_ACCOUNT_JSON=\"${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}\"";
+            echo "GOOGLE_DRIVE_FOLDER_ID=\"${{ secrets.GOOGLE_DRIVE_FOLDER_ID }}\"";
+            echo "GOOGLE_DRIVE_ROOT_FOLDER=\"${{ secrets.GOOGLE_DRIVE_ROOT_FOLDER }}\"";
+
+            echo "EMAIL_ENABLED=${{ secrets.EMAIL_ENABLED }}";
+            echo "DASHBOARD_URL=\"${{ secrets.DASHBOARD_URL }}\"";
+
+            echo "WEB_CONCURRENCY=${{ secrets.WEB_CONCURRENCY }}";
+            echo "RUN_MIGRATIONS=${{ secrets.RUN_MIGRATIONS }}";
+          } > .env
+
+      # The face models: about 200 MB that never change. Kept on the host and
+      # mounted into the container, so a rebuild does not fetch them again. Only
+      # the missing ones are downloaded, and the two large ones are checked against
+      # the hashes in the README before anything is asked to load them.
+      - name: Ensure the face models are on the host
+        run: |
+          set -e
+          mkdir -p models
+
+          if [ ! -f models/face_detection_yunet_2023mar.onnx ]; then
+            echo "downloading YuNet"
+            curl -sL --fail -o models/face_detection_yunet_2023mar.onnx \
+              https://github.com/opencv/opencv_zoo/raw/main/models/face_detection_yunet/face_detection_yunet_2023mar.onnx
+          fi
+
+          if [ ! -f models/face_landmarker.task ]; then
+            echo "downloading the MediaPipe face landmarker"
+            curl -sL --fail -o models/face_landmarker.task \
+              https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/latest/face_landmarker.task
+          fi
+
+          if [ ! -f models/det_10g.onnx ] || [ ! -f models/w600k_r50.onnx ]; then
+            echo "downloading the buffalo_l pack for SCRFD and ArcFace"
+            curl -sL --fail -o /tmp/buffalo_l.zip \
+              https://github.com/deepinsight/insightface/releases/download/v0.7/buffalo_l.zip
+            unzip -j -o /tmp/buffalo_l.zip 'det_10g.onnx' 'w600k_r50.onnx' -d models/
+            rm -f /tmp/buffalo_l.zip
+          fi
+
+          echo "5838f7fe053675b1c7a08b633df49e7af5495cee0493c7dcf6697200b85b5b91  models/det_10g.onnx" | sha256sum -c -
+          echo "4c06341c33c2ca1f86781dab0e829f88ad5b64be9fba56e56bc9ebdefc619e43  models/w600k_r50.onnx" | sha256sum -c -
+
+      - name: Deploy
+        env:
+          GH_TOKEN: ${{ secrets.PAT_TOKEN }}
+        run: |
+          set -e
+          mkdir -p var/evidence
+          git remote set-url origin https://${{ secrets.PAT_TOKEN }}@github.com/${{ github.repository }}.git
+          git pull origin main
+          docker compose up --build -d
+          # Dangling images only. A full `docker system prune -af` would throw away
+          # the build cache, and this image installs TensorFlow and compiles
+          # insightface: the next deploy would take twenty minutes instead of two.
+          docker image prune -f
+
+      - name: Wait for it to answer
+        run: |
+          set -e
+          for attempt in $(seq 1 30); do
+            if curl -fsS http://localhost:4500/v1/health > /dev/null; then
+              echo "healthy after ${attempt} attempt(s)"
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "the service did not become healthy; last 80 lines of its log:"
+          docker logs --tail 80 kyc-api
+          exit 1

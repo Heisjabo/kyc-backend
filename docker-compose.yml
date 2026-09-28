@@ -1,0 +1,35 @@
+services:
+  kyc-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: kyc-api
+    restart: always
+    ports:
+      # 4500 on the host, 8000 inside. 8000 is left alone because something else
+      # on this machine may already be answering on it, and these are the ports
+      # already taken by other containers: 3000, 3001, 3030, 4000, 4001, 4002,
+      # 5000, 5001, 7000, 9000, 10000. Point the domain at 4500.
+      - 4500:8000
+    env_file:
+      - .env
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+    volumes:
+      # The face models, about 200 MB and never changing. Kept on the host so a
+      # rebuild does not fetch them again; the deploy workflow downloads them once
+      # if they are missing. Read-only, because nothing in the service writes here.
+      - ./models:/srv/models:ro
+      # Evidence only lands here while Google Drive is not configured. Mounted so
+      # that whatever does land here survives a rebuild rather than going down with
+      # the container.
+      - ./var/evidence:/srv/var/evidence
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/v1/health"]
+      interval: 30s
+      timeout: 5s
+      # Generous: the first start loads three models before it answers anything.
+      start_period: 120s
+      retries: 3
