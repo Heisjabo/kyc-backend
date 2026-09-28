@@ -3,15 +3,19 @@
 Two things come out of a check and have to survive it: the images and clips it
 judged, and the report that will be built from them. This is where they go.
 
-The bytes are written under EVIDENCE_DIR, one folder per verification, and the
-row in verification_files records the key, the size and a SHA-256 so the file
-can later be proved to be the one that was judged. In production EVIDENCE_DIR
-becomes a bucket and only this module changes: a storage key is deliberately an
-opaque string rather than a path, so nothing downstream cares where it points.
+The bytes go to Google Drive, one subfolder per verification named by our own
+verification id, and the storage key is the Drive file id. Where Drive is not
+configured, which is how the tests and a developer's laptop run, they go to a
+folder on this machine and the key is a path under EVIDENCE_DIR. There is no
+switch: the Drive settings decide it.
 
-Nothing here is ever served directly to a browser. These are photographs of
-identity documents and faces, so they are read back through the API, by a caller
-holding a key, and embedded in the report rather than linked.
+Either way the row in verification_files records the key, the size and a SHA-256,
+so the file can later be proved to be the one that was judged. The key is an
+opaque string rather than a path, so swapping the backend changes this module and
+nothing else.
+
+Nothing here is served directly to a browser: these files are read back through
+the API and embedded in the report rather than linked.
 """
 
 import hashlib
@@ -20,6 +24,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from app.core.config import settings
+from app.storage import drive
 
 logger = logging.getLogger(__name__)
 
@@ -42,28 +47,51 @@ class Stored:
     sha256: str
 
 
-def keep(reference: str, data: bytes, kind: str, content_type: str = "image/jpeg") -> Stored | None:
+def keep(
+    verification_id: int | str, data: bytes, kind: str, content_type: str = "image/jpeg"
+) -> Stored | None:
     """Write one piece of evidence and describe it. None if there is nothing.
 
-    `kind` is one of the FileKind values, and it becomes part of the key so a
-    folder can be read by a person without opening anything.
+    `kind` is one of the FileKind values, and it becomes part of the file's name
+    so a folder can be read by a person without opening anything.
     """
     if not data:
         return None
 
     digest = hashlib.sha256(data).hexdigest()
     name = f"{kind}-{digest[:12]}{_EXTENSIONS.get(content_type, '.bin')}"
-    key = f"{reference}/{name}"
 
-    root = Path(settings.EVIDENCE_DIR)
-    path = root / key
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_bytes(data)
-    logger.info("kept %s for %s: %d bytes", kind, reference, len(data))
+    if _on_drive():
+        key = drive.upload(verification_id, name, data, content_type)
+    else:
+        key = f"{verification_id}/{name}"
+        path = Path(settings.EVIDENCE_DIR) / key
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(data)
+        logger.info("kept %s for verification %s: %d bytes", kind, verification_id, len(data))
+
     return Stored(storage_key=key, content_type=content_type, byte_size=len(data), sha256=digest)
 
 
 def read(storage_key: str) -> bytes | None:
-    """The bytes back, for the API to serve or the report to embed."""
+    """The bytes back, for the API to serve or the report to embed. None when the
+    file is gone, which a retention rule is allowed to do."""
+    if _on_drive():
+        return drive.download(storage_key)
     path = Path(settings.EVIDENCE_DIR) / storage_key
     return path.read_bytes() if path.is_file() else None
+
+
+def remove(storage_key: str) -> bool:
+    """Delete one piece of evidence."""
+    if _on_drive():
+        return drive.delete(storage_key)
+    path = Path(settings.EVIDENCE_DIR) / storage_key
+    if not path.is_file():
+        return False
+    path.unlink()
+    return True
+
+
+def _on_drive() -> bool:
+    return drive.configured()

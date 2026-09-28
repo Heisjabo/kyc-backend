@@ -395,7 +395,7 @@ def test_the_face_page_can_show_the_document_portrait(client, api_key, db_sessio
     stub_document(monkeypatch)
 
     def keep_portrait(db, verification, step, front):
-        stored = evidence.keep(verification.reference, b"portrait-bytes", "document_portrait")
+        stored = evidence.keep(verification.id, b"portrait-bytes", "document_portrait")
         db.add(VerificationFile(verification_id=verification.id, step_id=step.id,
                                 kind=FileKind.document_portrait, storage_key=stored.storage_key,
                                 content_type=stored.content_type, byte_size=stored.byte_size,

@@ -10,6 +10,11 @@ psycopg[binary]==3.*
 
 # Accounts and API keys. Argon2id for passwords (the OWASP recommendation),
 # PyJWT for dashboard sessions.
+# Evidence on Google Drive: a service account uploads and reads it back, and
+# nothing is ever shared from there. See app/storage/drive.py.
+google-api-python-client==2.*
+google-auth==2.*
+
 argon2-cffi==25.*
 pyjwt==2.*
 # EmailStr validation in the auth schemas.

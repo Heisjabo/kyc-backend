@@ -129,6 +129,25 @@ def new_reset_token() -> tuple[str, str]:
     return token, fingerprint(token)
 
 
+def check_evidence_store() -> None:
+    """Refuse to start with Drive half configured.
+
+    The key and the folder, or neither. Finding out mid-verification means a
+    document is read, judged and then dropped, with somebody standing there
+    holding their passport.
+    """
+    from app.storage import drive
+
+    if drive.configured() or not drive.anything_set():
+        # Fully configured, or not configured at all (evidence goes to the local
+        # folder, which is how tests and a developer's machine run).
+        return
+    raise RuntimeError(
+        "Google Drive is partly configured: " + ", ".join(drive.missing_settings()) + " not set. "
+        "Set the key and the folder, or neither to keep evidence on this machine."
+    )
+
+
 def check_configuration() -> None:
     """Refuse to start with a signing key anyone could guess.
 
@@ -136,6 +155,8 @@ def check_configuration() -> None:
     developer's machine, that means anybody could mint a session token for any
     account, so the service stops rather than pretending to be guarded.
     """
+    check_evidence_store()
+
     default = "development-secret-not-for-anywhere-else"
     if settings.ENVIRONMENT == "development":
         return
