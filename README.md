@@ -44,6 +44,56 @@ uvicorn app.main:app --reload --port 8000
 - Health: http://localhost:8000/v1/health
 - API docs: http://localhost:8000/docs
 
+## Deployment
+
+A push to `main` deploys, through `.github/workflows/build.yml` on the
+**self-hosted `prod` runner**, the same shape tuesday-backend uses: write `.env`
+from the repository's secrets, then `docker compose up --build -d`.
+
+**The container answers on 4500 on the host**, 8000 inside. Point the domain at
+4500. These ports were already taken on that machine and are left alone: 3000,
+3001, 3030, 4000, 4001, 4002, 5000, 5001, 7000, 9000, 10000, and 8000 is skipped
+because something outside Docker may be answering on it.
+
+**The models are on the host, not in the image.** The four ONNX and TFLite files
+are about 200 MB and never change, so the workflow downloads any that are missing
+into `./models` (checking the two large ones against the hashes above) and compose
+mounts that folder read-only. The image would otherwise refetch them on every
+build, and the deploy deliberately prunes only dangling images rather than running
+`docker system prune -af`: this image installs TensorFlow and compiles insightface,
+so throwing away the build cache turns a two-minute deploy into twenty.
+
+**Migrations are not run by a deploy.** `RUN_MIGRATIONS` is off unless set, because
+a deploy that quietly reshapes a database holding people's identity documents is
+not something to find out about afterwards. Run them yourself:
+
+```bash
+docker compose exec kyc-api alembic upgrade head
+```
+
+**Secrets the workflow expects**, all in the repository's Actions secrets:
+
+| | |
+|---|---|
+| `PAT_TOKEN` | the checkout and pull token, as in tuesday-backend |
+| `DATABASE_URL` | `postgresql+psycopg://user:pass@host:5432/kyc` |
+| `REDIS_URL` | |
+| `JWT_SECRET` | long and random. The service refuses to start outside development with the published default |
+| `ENVIRONMENT` | `production` |
+| `ENABLE_DOCS` | `false` in production unless the docs are wanted in public |
+| `GOOGLE_SERVICE_ACCOUNT_EMAIL`, `GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY` | the key's `client_email` and `private_key`, newlines written as `\n` |
+| `GOOGLE_SERVICE_ACCOUNT_JSON` | or the whole key file on one line, instead of those two |
+| `GOOGLE_DRIVE_FOLDER_ID`, `GOOGLE_DRIVE_ROOT_FOLDER` | the Shared Drive folder, and the platform's folder inside it |
+| `SESSION_TTL_MINUTES`, `MAX_SESSION_TTL_MINUTES` | |
+| `EMAIL_ENABLED`, `DASHBOARD_URL` | |
+| `WEB_CONCURRENCY` | workers, default 1. Each one loads SCRFD, ArcFace and the liveness mesh into its own memory |
+| `RUN_MIGRATIONS` | `true` only when a deploy should migrate |
+
+A secret left unset is written as an empty value, which for most of these means
+the default in `app/core/config.py`. Half-configured Drive settings stop the
+service at start-up and name what is missing, rather than failing at somebody's
+first document.
+
 ## Database
 
 Postgres, through SQLAlchemy; migrations are Alembic's. The tables are in

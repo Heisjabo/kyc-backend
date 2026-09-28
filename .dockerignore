@@ -1,0 +1,20 @@
+# The models are mounted from the host, not copied in: 200 MB that never change.
+models/
+
+# Evidence and debug frames are photographs of people. They never belong in an
+# image, and var/ is a mounted volume anyway.
+var/
+.venv/
+__pycache__/
+*.pyc
+
+.git/
+.github/
+.env
+.env.*
+!.env.example
+
+tests/
+.pytest_cache/
+.ruff_cache/
+*.md
