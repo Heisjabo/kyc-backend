@@ -4,6 +4,10 @@ on:
   push:
     branches:
       - main
+  # So a secret can be corrected and the service redeployed from the Actions tab,
+  # without an empty commit: .env is written at deploy time, so a changed secret
+  # only reaches the container on the next run.
+  workflow_dispatch:
 
 jobs:
   deploy:

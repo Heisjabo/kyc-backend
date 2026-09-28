@@ -92,7 +92,7 @@ docker compose exec kyc-api alembic upgrade head
 
 | | |
 |---|---|
-| `DATABASE_URL` | `postgresql+psycopg://user:pass@host:5432/kyc` |
+| `DATABASE_URL` | `postgresql+psycopg://user:pass@host:5432/kyc?connect_timeout=10`. Its own database, and no Prisma parameters: `pool_timeout` and `connection_limit` are Prisma's, not libpq's, and psycopg refuses to connect with them |
 | `REDIS_URL` | |
 | `JWT_SECRET` | long and random. The service refuses to start outside development with the published default |
 | `ENVIRONMENT` | `production` |
