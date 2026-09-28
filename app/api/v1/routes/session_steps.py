@@ -36,11 +36,13 @@ from app.engines.face import detect_faces, portrait
 from app.engines.image import InvalidImageError, decode_image
 from app.engines import recognition
 from app.engines.recognition import embed, pass_threshold, similarity
+from app.pipeline.address import scan_address_proof
 from app.pipeline.document import scan_document
 from app.pipeline.face_match import match_faces
 from app.pipeline.liveness import check_liveness
 from app.rules import document as document_rules
 from app.rules import face as face_rules
+from app.schemas.address import AddressCheckResponse, ProofType
 from app.schemas.document import Applicant as ApplicantDetails
 from app.schemas.document import Decision, DocumentCheckResponse, DocumentType
 from app.schemas.face import FaceVerificationResponse
@@ -311,6 +313,69 @@ def _fill_applicant(db: Session, verification: Verification, extracted: dict) ->
     applicant.date_of_birth = extracted.get("date_of_birth") or applicant.date_of_birth
     applicant.country = extracted.get("issuing_country") or applicant.country
     db.flush()
+
+
+@router.post("/{token}/address", response_model=AddressCheckResponse)
+def submit_address(
+    token: str,
+    request: Request,
+    document_type: ProofType = Form(..., description="The kind of proof being uploaded"),
+    proof: UploadFile = File(..., description="Photo or scan of the bill, statement or agreement"),
+    back: UploadFile | None = File(None, description="Second page, when the proof has one"),
+    db: Session = Depends(get_session),
+) -> AddressCheckResponse:
+    """Check a proof of address against the address the client gave us.
+
+    Uploaded, not captured: a bill or a statement is a file somebody already has,
+    or a photograph they took before they got here, and there is nothing for a
+    camera guide to help with.
+
+    The address comes from the verification, never from this request, and the name
+    looked for is the one the document step proved. So the person can choose which
+    document to upload, and nothing else about their own check.
+    """
+    verification = _open_session(db, token)
+    _require_turn(verification, VerificationStep.address)
+
+    claimed_address = (verification.claimed or {}).get("address")
+    if not claimed_address:
+        # Initiation refuses this, so reaching it means the verification was made
+        # before that rule existed.
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "This verification was created without an address, so there is nothing to check against",
+        )
+
+    front_bytes = _read(proof, "proof")
+    back_bytes = _read(back, "back") if back else None
+
+    step = service.open_step(db, verification, VerificationStep.address)
+    step.device = _device(request)
+
+    applicant = verification.applicant
+    result = scan_address_proof(
+        proof_type=document_type,
+        claimed_address=claimed_address,
+        front=front_bytes,
+        back=back_bytes,
+        names=[applicant.first_name, applicant.last_name] if applicant else [],
+    )
+
+    _keep_file(db, verification, step, FileKind.address_proof, front_bytes, proof.content_type)
+    if back_bytes:
+        _keep_file(db, verification, step, FileKind.address_proof, back_bytes, back.content_type)
+
+    service.finish_step(
+        db,
+        step,
+        status=_DECISION_TO_STATUS[result.decision],
+        reasons=result.reasons,
+        warnings=result.warnings,
+        result={"checks": [check.model_dump(mode="json") for check in result.checks]},
+        extracted=result.extracted.model_dump(mode="json"),
+    )
+    service.settle(db, verification)
+    return result
 
 
 @router.post("/{token}/face", response_model=FaceVerificationResponse)

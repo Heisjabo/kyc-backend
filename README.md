@@ -229,6 +229,11 @@ have to match the document as printed. `country` is the country the document is
 expected from. `callback_url` and `redirect_url` are accepted and recorded;
 nothing is sent to them yet.
 
+`applicant.address` is **required when `services` includes `address`**, and the
+request is refused with 422 without it. There is nothing to check a bill against
+otherwise, and finding that out at the step means the person is standing there
+holding one.
+
 ### Endpoints
 
 | | |
@@ -238,6 +243,7 @@ nothing is sent to them yet.
 | `GET /v1/sessions/{token}` | where the person is. Link only |
 | `POST /v1/sessions/{token}/document` | submit the document. Link only |
 | `POST /v1/sessions/{token}/face` | liveness and the face match. Link only |
+| `POST /v1/sessions/{token}/address` | upload a proof of address. Link only |
 
 `session_url` in the response points at the first of these:
 
@@ -246,6 +252,7 @@ nothing is sent to them yet.
 | `/verify/{token}` | where they are and what is next, with the QR to carry on by phone |
 | `/verify/{token}/document` | choose which document, then photograph it. The person's details are not asked for again: they came from the client at initiation, and nothing typed here is sent |
 | `/verify/{token}/face` | the liveness challenge and the portrait |
+| `/verify/{token}/address` | upload a bill or statement. An upload, not a capture: a bill is a file somebody already has |
 
 `reference` is the client's own string, unique within their account, and it is
 what they look a customer up by. One is generated if they send none.
@@ -394,10 +401,11 @@ in reports rather than linked.
 
 Deliberately parked, in the order they matter:
 
-- **Address verification and the due diligence form.** Both exist as step types
-  in the schema and the vocabulary, so adding them is a handler rather than a
-  migration. Our own Shufti integration already sends `address` and
+- **The due diligence form.** A step type in the schema already, so it is a
+  handler rather than a migration. Our own Shufti integration sends
   `questionnaire`, which is the shape to match.
+- **Tamper detection on an address proof**, which is the one check in the address
+  step reported as not run. See below.
 - **Callbacks.** The table is there and nothing writes to it: we do not yet tell
   a client anything, they have to poll.
 - **Device and network intelligence.** The table holds the shape of Shufti's
@@ -440,6 +448,80 @@ Pipeline:
 Decisions: `pass`, `fail`, `review` (a person decides) or `retake` (bad photo or not a
 document). `reasons` explain the decision; `warnings` are worth knowing but did not change
 it. Thresholds live in `app/rules/document.py`.
+
+## Address check
+
+`POST /v1/sessions/{token}/address` (multipart form)
+
+| Field | Required | Notes |
+|---|---|---|
+| `document_type` | yes | `utility_bill`, `bank_statement`, `credit_card_statement` or `rent_agreement`, the `supported_types` we send Shufti |
+| `proof` | yes | JPEG, PNG or WebP, max 10 MB |
+| `back` | no | Second page, when the proof has one |
+
+**Uploaded, not captured.** A bill is a file somebody already has, or a
+photograph they took before they got here, so the page is a file picker rather
+than a camera.
+
+The address is the one the client sent at initiation, never anything typed on the
+page, and the name looked for is the one the **document step proved**. So the
+person chooses which document to upload, and nothing else about their own check.
+
+The checks carry Shufti's own names, so a client holding one of their reports can
+map ours onto it line for line:
+
+| ours | Shufti's report |
+|---|---|
+| `address_document_proof` | Address Document Proof |
+| `address_on_document_match` | Address on Document Match |
+| `match_address_proofs_with_document_proofs` | Match Address Proofs With Document Proofs |
+| `address_document_expiration` | Document Expiration |
+| `address_document_authenticity` | Address Document Authenticity |
+
+### Matching an address to a document
+
+An address and a bill rarely name a place at the same level. Somebody claims
+"Kigali, Rwanda" and their electricity bill prints "KG 586 St", or "Kigali City",
+or nothing above the street. So both sides go through the same reduction
+(`app/engines/addresses.py`) and are compared as sets of places:
+
+1. normalise: lower case, no accents, no punctuation, `st`/`street` and
+   `ave`/`avenue` folded together, filler words dropped
+2. expand: a `KG`, `KK` or `KN` street code implies Kigali and Rwanda, since those
+   are Kigali's three districts; a known city implies its country; a US state
+   implies the United States
+3. compare at street, then city, then country, and pass on the first level that
+   shares a place
+
+| claimed | on the document | result |
+|---|---|---|
+| Kigali, Rwanda | Kigali City | pass, matched on the city |
+| Kigali, Rwanda | KG 580 St | pass, matched on the city (`KG` is Kigali) |
+| Kigali, Rwanda | Musanze | pass, matched on the country, with a warning |
+| Kigali, Rwanda | Nairobi, Kenya | fail |
+
+It is pass or fail, with no partial match: a check that asks a person to decide
+every time an address is written differently is a check nobody runs. The **level
+that matched is recorded**, because matching on a country alone is thin evidence:
+it says a Rwandan bill cleared a Rwandan address, and that belongs in the record
+rather than behind the word "pass".
+
+The place tables live in `app/rules/places.py`, seeded from what is actually in
+tuesday-backend's user addresses: US street addresses, Kenyan addresses, PO boxes,
+Rwandan districts and sectors, and a handful of Kigali street codes. Adding a
+place is one line.
+
+A **PO box fails** (`PO_BOX_NOT_ACCEPTED`), before anything is read, because our
+Shufti request says `po_box: false` and a mailbox is not somewhere anybody lives.
+
+**90 days**, as the `document_validity` we send Shufti: the newest date on the
+page that is not in the future has to be within that, or the proof is too old. No
+readable date at all goes to a person rather than failing, because plenty of
+genuine bills print one in a format nothing reads.
+
+**Authenticity is reported as `skipped`, never as passed.** Shufti runs a tamper
+check there. We have no model for it, and a blank check that reads as a pass in a
+report somebody relies on is worse than one that says plainly it was not run.
 
 ## Face verification
 

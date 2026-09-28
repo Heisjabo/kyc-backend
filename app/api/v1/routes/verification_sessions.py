@@ -98,6 +98,15 @@ def create_verification(
     if not body.services:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "At least one service is required")
 
+    # The address step has nothing to check a document against unless the client
+    # says where the person lives. Refused here rather than at the step, where the
+    # person would be holding a bill and be told the request was wrong all along.
+    if VerificationStep.address.value in body.services and not (body.applicant.address or "").strip():
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "applicant.address is required when the address service is requested",
+        )
+
     claimed = body.applicant.model_dump(mode="json", exclude_none=True)
     try:
         verification = service.create_verification(

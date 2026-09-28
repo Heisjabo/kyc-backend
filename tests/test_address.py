@@ -1,0 +1,404 @@
+"""Proof of address.
+
+The bills are drawn here rather than photographed, so these test the rules rather
+than the OCR, but the text is read by the real reader and the places are matched
+by the real matcher.
+
+The place expansion tests need neither an image nor a database: they are the
+judgement this step turns on, which is whether an address and a document name the
+same place when they spell it differently.
+"""
+
+import uuid
+from datetime import date, timedelta
+
+import cv2
+import numpy as np
+import pytest
+from fastapi.testclient import TestClient
+from sqlalchemy import create_engine, select, text
+from sqlalchemy.orm import sessionmaker
+
+from app.core.config import settings
+from app.db.base import Base
+from app.db.models import FileKind, Step, StepStatus, VerificationFile, VerificationStep
+from app.db.session import get_session
+from app.engines.addresses import is_po_box, read_places
+from app.main import app
+from app.pipeline.address import scan_address_proof
+from app.schemas.address import ProofType
+from app.schemas.document import CheckResult, CheckStatus, Decision, DocumentCheckResponse, ExtractedFields
+
+ACCOUNT = {
+    "email": "address@tuesday.africa", "password": "horse-battery", "first_name": "Jean",
+    "last_name": "Mugisha", "phone": "788123456", "country_code": "+250",
+    "date_of_birth": "1995-04-12", "country": "Rwanda",
+}
+
+
+# The places, read and expanded
+
+def test_a_city_implies_its_country():
+    found = read_places("Kigali, Rwanda")
+    assert found.cities == {"kigali"} and found.countries == {"rwanda"}
+
+
+def test_a_street_code_implies_its_city():
+    """KG, KK and KN are Kigali's three districts, so the code names the city."""
+    found = read_places("KG 580 St")
+    assert found.streets == {"kg 580"}
+    assert found.cities == {"kigali"} and found.countries == {"rwanda"}
+
+
+def test_a_district_implies_its_city_and_its_country_at_the_right_levels():
+    """Kicukiro is in Kigali, and Kigali is not a country."""
+    found = read_places("Kicukiro")
+    assert found.cities == {"kicukiro", "kigali"}
+    assert found.countries == {"rwanda"}
+
+
+def test_the_united_states_is_one_country_not_three_words():
+    found = read_places("1200 Dove School Road, CA, United States of America")
+    assert found.countries == {"united states"}
+    assert "ca" in found.cities
+    assert "dove" in found.streets and "school" in found.streets
+
+
+def test_filler_words_are_not_places():
+    found = read_places("House No 4, Sector Remera, Kigali City")
+    assert "house" not in found.streets and "sector" not in found.streets
+    assert found.cities == {"kigali", "remera"}
+
+
+def test_a_po_box_is_recognised_however_it_is_written():
+    assert is_po_box("P.O Box 19244-00100")
+    assert is_po_box("PO BOX 123, Nairobi")
+    assert is_po_box("Post Office Box 9")
+    assert not is_po_box("KG 586 Street, Kigali")
+
+
+# The check itself
+
+def bill(*lines: str, width: int = 1400, height: int = 900) -> bytes:
+    image = np.full((height, width, 3), 245, dtype=np.uint8)
+    y = 90
+    for text_line in lines:
+        cv2.putText(image, text_line, (70, y), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (20, 20, 20), 2, cv2.LINE_AA)
+        y += 70
+    return cv2.imencode(".jpg", image, [cv2.IMWRITE_JPEG_QUALITY, 95])[1].tobytes()
+
+
+def utility_bill(place="KIGALI CITY", name="JEAN MUGISHA", issued=None) -> bytes:
+    issued = issued or date.today() - timedelta(days=10)
+    return bill(
+        "REG ELECTRICITY BILL",
+        "Customer: " + name,
+        "Address: " + place,
+        "Meter number: 37200145",
+        "Units: 45 kWh",
+        "Date: " + issued.strftime("%d-%m-%Y"),
+        "Amount due: RWF 12,400",
+    )
+
+
+def scan(proof, claimed="Kigali, Rwanda", names=("Jean", "Mugisha"), proof_type=ProofType.utility_bill):
+    return scan_address_proof(
+        proof_type=proof_type,
+        claimed_address=claimed,
+        front=proof,
+        names=list(names),
+    )
+
+
+def named(result) -> dict:
+    return {check.name: check.status for check in result.checks}
+
+
+def test_a_city_on_the_bill_matches_a_city_in_the_address():
+    result = scan(utility_bill(place="KIGALI CITY"))
+    assert result.decision == Decision.passed
+    assert result.extracted.matched_level == "city"
+    assert named(result)["address_on_document_match"] == CheckStatus.passed
+
+
+def test_the_city_and_country_together_match():
+    result = scan(utility_bill(place="KIGALI CITY, RWANDA"))
+    assert result.decision == Decision.passed
+    assert result.extracted.matched_level == "city"
+
+
+def test_a_street_code_on_the_bill_matches_the_city_claimed():
+    """The person claimed Kigali; the bill only prints KG 580 St. Same place."""
+    result = scan(utility_bill(place="KG 580 ST"))
+    assert result.decision == Decision.passed
+    assert result.extracted.matched_level == "city"
+    assert "kigali" in result.extracted.matched_places
+
+
+def test_a_different_city_and_country_fails():
+    result = scan(utility_bill(place="NAIROBI, KENYA"))
+    assert result.decision == Decision.failed
+    assert "ADDRESS_NOT_ON_DOCUMENT" in result.reasons
+
+
+def test_matching_on_the_country_alone_passes_but_says_so():
+    """A Rwandan bill against a Rwandan address is a thin pass, and the record
+    has to show that it was thin."""
+    result = scan(utility_bill(place="MUSANZE"), claimed="Kigali, Rwanda")
+    assert result.decision == Decision.passed
+    assert result.extracted.matched_level == "country"
+    assert "ADDRESS_MATCHED_ON_COUNTRY_ONLY" in result.warnings
+
+
+def test_a_po_box_is_refused_without_reading_anything():
+    result = scan(utility_bill(), claimed="P.O Box 19244-00100")
+    assert result.decision == Decision.failed
+    assert result.reasons == ["PO_BOX_NOT_ACCEPTED"]
+    # Nothing was read: the address itself was the problem.
+    assert [check.name for check in result.checks] == ["address_on_document_match"]
+
+
+def test_a_bill_in_somebody_elses_name_fails():
+    result = scan(utility_bill(name="ALICE MUKAMANA"))
+    assert result.decision == Decision.failed
+    assert "NAME_NOT_ON_ADDRESS_PROOF" in result.reasons
+    assert named(result)["match_address_proofs_with_document_proofs"] == CheckStatus.failed
+
+
+def test_an_unverified_owner_goes_to_a_person():
+    result = scan(utility_bill(), names=())
+    assert result.decision == Decision.review
+    assert "OWNER_NOT_VERIFIED" in result.reasons
+
+
+def test_a_bill_older_than_ninety_days_fails():
+    result = scan(utility_bill(issued=date.today() - timedelta(days=200)))
+    assert result.decision == Decision.failed
+    assert "PROOF_TOO_OLD" in result.reasons
+    assert result.extracted.proof_age_days >= 200
+
+
+def test_a_bill_with_no_readable_date_goes_to_a_person():
+    proof = bill(
+        "REG ELECTRICITY BILL",
+        "Customer: JEAN MUGISHA",
+        "Address: KIGALI CITY",
+        "Meter number: 37200145",
+        "Units: 45 kWh",
+        "Amount due: RWF 12,400",
+    )
+    result = scan(proof)
+    assert result.decision == Decision.review
+    assert "PROOF_DATE_NOT_FOUND" in result.reasons
+
+
+def test_a_document_that_is_not_the_declared_type_goes_to_a_person():
+    result = scan(utility_bill(), proof_type=ProofType.bank_statement)
+    assert result.decision == Decision.review
+    assert "PROOF_TYPE_MISMATCH" in result.reasons
+
+
+def test_a_bank_statement_is_recognised_as_one():
+    proof = bill(
+        "BANK OF KIGALI",
+        "ACCOUNT STATEMENT",
+        "Account holder: JEAN MUGISHA",
+        "Address: KG 580 ST, KIGALI",
+        "Opening balance: 120,000",
+        "Closing balance: 98,400",
+        "Date: " + (date.today() - timedelta(days=5)).strftime("%d-%m-%Y"),
+    )
+    result = scan(proof, proof_type=ProofType.bank_statement)
+    assert result.decision == Decision.passed
+    assert named(result)["address_document_type"] == CheckStatus.passed
+
+
+def test_a_page_with_nothing_on_it_asks_for_another_photograph():
+    result = scan(bill("BILL"))
+    assert result.decision == Decision.retake
+    assert "PROOF_NOT_READABLE" in result.reasons
+
+
+def test_authenticity_is_reported_as_not_checked_never_as_passed():
+    """Shufti runs a tamper check here and we have no model for it. A blank check
+    that reads as a pass in a report somebody relies on is worse than one that
+    says plainly it was not run."""
+    result = scan(utility_bill())
+    assert named(result)["address_document_authenticity"] == CheckStatus.skipped
+    assert "AUTHENTICITY_NOT_CHECKED" in result.warnings
+
+
+# The step, end to end
+
+def _reachable() -> bool:
+    try:
+        create_engine(settings.DATABASE_URL).connect().close()
+        return True
+    except Exception:
+        return False
+
+
+needs_db = pytest.mark.skipif(not _reachable(), reason="needs the local Postgres")
+
+
+@pytest.fixture()
+def db_session():
+    schema = f"test_{uuid.uuid4().hex[:12]}"
+    engine = create_engine(settings.DATABASE_URL, connect_args={"options": f"-csearch_path={schema}"})
+    admin = create_engine(settings.DATABASE_URL, isolation_level="AUTOCOMMIT")
+    with admin.connect() as connection:
+        connection.execute(text(f'CREATE SCHEMA "{schema}"'))
+    Base.metadata.create_all(engine)
+    session = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)()
+    try:
+        yield session
+    finally:
+        session.close()
+        engine.dispose()
+        with admin.connect() as connection:
+            connection.execute(text(f'DROP SCHEMA "{schema}" CASCADE'))
+        admin.dispose()
+
+
+@pytest.fixture()
+def client(db_session, tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "EVIDENCE_DIR", str(tmp_path / "evidence"))
+    app.dependency_overrides[get_session] = lambda: db_session
+    with TestClient(app) as test_client:
+        yield test_client
+    app.dependency_overrides.clear()
+
+
+@pytest.fixture()
+def api_key(client) -> dict:
+    registered = client.post("/v1/auth/register", json=ACCOUNT).json()
+    bearer = {"Authorization": f"Bearer {registered['access_token']}"}
+    made = client.post("/v1/api-keys", json={"name": "tests"}, headers=bearer).json()
+    return {"X-API-Key": made["key"]}
+
+
+def open_with_address(client, api_key, address="KG 586 Street, Kigali, Rwanda", services=None):
+    body = {
+        "reference": f"ADDR-{uuid.uuid4().hex[:8]}",
+        "services": services or ["document", "address"],
+        "applicant": {"first_name": "Jean", "last_name": "Mugisha", "country": "Rwanda", "address": address},
+    }
+    return client.post("/v1/verifications", json=body, headers=api_key)
+
+
+def pass_document(client, api_key, monkeypatch, **overrides):
+    """A verification whose document step passed, so a name has been proved."""
+    from app.api.v1.routes import session_steps
+
+    def fake_scan(document_type, front, back=None, applicant=None, today=None, require_adult=True):
+        return DocumentCheckResponse(
+            decision=Decision.passed, reasons=[], warnings=[], document_type=document_type,
+            extracted=ExtractedFields(source="visual", surname="MUGISHA", given_names="JEAN",
+                                      issuing_country="RWA", document_number="1199980012345678"),
+            checks=[CheckResult(name="document_detection", status=CheckStatus.passed)], processing_ms=3,
+        )
+
+    monkeypatch.setattr(session_steps, "scan_document", fake_scan)
+    monkeypatch.setattr(session_steps, "_keep_document_portrait", lambda *a: "ok")
+
+    opened = open_with_address(client, api_key, **overrides).json()
+    token = opened["session_url"].rsplit("/", 1)[-1]
+    client.post(f"/v1/sessions/{token}/document", data={"document_type": "id_card"},
+                files={"front": ("front.jpg", utility_bill(), "image/jpeg")})
+    return opened, token
+
+
+def submit_address(client, token, proof=None, proof_type="utility_bill"):
+    return client.post(
+        f"/v1/sessions/{token}/address",
+        data={"document_type": proof_type},
+        files={"proof": ("bill.jpg", proof or utility_bill(), "image/jpeg")},
+    )
+
+
+@needs_db
+def test_initiation_without_an_address_is_refused(client, api_key):
+    """Refused here rather than at the step, where the person would be holding a
+    bill and be told the request was wrong all along."""
+    response = client.post("/v1/verifications", json={
+        "reference": f"ADDR-{uuid.uuid4().hex[:8]}",
+        "services": ["document", "address"],
+        "applicant": {"first_name": "Jean", "last_name": "Mugisha", "country": "Rwanda"},
+    }, headers=api_key)
+    assert response.status_code == 422
+    assert "applicant.address is required" in response.text
+
+
+@needs_db
+def test_a_blank_address_counts_as_no_address(client, api_key):
+    assert open_with_address(client, api_key, address="   ").status_code == 422
+
+
+@needs_db
+def test_an_address_is_not_required_without_the_address_service(client, api_key):
+    response = client.post("/v1/verifications", json={
+        "reference": f"ADDR-{uuid.uuid4().hex[:8]}",
+        "services": ["document", "face"],
+        "applicant": {"first_name": "Jean", "last_name": "Mugisha"},
+    }, headers=api_key)
+    assert response.status_code == 201
+
+
+@needs_db
+def test_the_step_records_its_verdict_and_keeps_the_file(client, api_key, monkeypatch, db_session):
+    opened, token = pass_document(client, api_key, monkeypatch)
+    body = submit_address(client, token).json()
+    assert body["decision"] == "pass"
+    assert body["extracted"]["document_type"] == "utility_bill"
+    assert body["extracted"]["full_address"] == "KG 586 Street, Kigali, Rwanda"
+    assert body["extracted"]["matched_level"] in ("street", "city")
+
+    step = db_session.scalars(
+        select(Step).where(Step.step == VerificationStep.address)
+    ).one()
+    assert step.status == StepStatus.passed
+    assert step.extracted["document_type"] == "utility_bill"
+    assert step.device["user_agent"]
+
+    kept = db_session.scalars(
+        select(VerificationFile).where(VerificationFile.kind == FileKind.address_proof)
+    ).all()
+    assert len(kept) == 1 and kept[0].step_id == step.id
+
+
+@needs_db
+def test_the_address_comes_from_the_verification_not_the_request(client, api_key, monkeypatch):
+    """The person chooses which document to upload, and nothing else. There is no
+    field here for them to type an address into."""
+    opened, token = pass_document(client, api_key, monkeypatch)
+    response = client.post(
+        f"/v1/sessions/{token}/address",
+        data={"document_type": "utility_bill", "full_address": "Nairobi, Kenya"},
+        files={"proof": ("bill.jpg", utility_bill(place="NAIROBI"), "image/jpeg")},
+    )
+    body = response.json()
+    assert body["extracted"]["full_address"] == "KG 586 Street, Kigali, Rwanda"
+    assert body["decision"] == "fail"
+
+
+@needs_db
+def test_the_name_looked_for_is_the_one_the_document_proved(client, api_key, monkeypatch):
+    opened, token = pass_document(client, api_key, monkeypatch)
+    body = submit_address(client, token, proof=utility_bill(name="ALICE MUKAMANA")).json()
+    assert body["decision"] == "fail"
+    assert "NAME_NOT_ON_ADDRESS_PROOF" in body["reasons"]
+
+
+@needs_db
+def test_the_address_step_waits_its_turn(client, api_key, monkeypatch):
+    opened = open_with_address(client, api_key).json()
+    token = opened["session_url"].rsplit("/", 1)[-1]
+    response = submit_address(client, token)
+    assert response.status_code == 409
+    assert "document" in response.text
+
+
+@needs_db
+def test_a_verification_that_never_asked_for_an_address_refuses_the_step(client, api_key, monkeypatch):
+    opened, token = pass_document(client, api_key, monkeypatch, services=["document"])
+    assert submit_address(client, token).status_code == 422

@@ -26,6 +26,7 @@ def scan_page() -> HTMLResponse:
 #   /verify/{token}            where you are, and what is next
 #   /verify/{token}/document   photograph your document
 #   /verify/{token}/face       prove you are here
+#   /verify/{token}/address    upload a bill showing where you live
 #
 # The token is unguessable and is the whole credential, which is what lets the
 # same link be scanned onto a phone and carried on there.
@@ -45,6 +46,12 @@ def session_document_page(token: str) -> HTMLResponse:
 def session_face_page(token: str) -> HTMLResponse:
     """The face step of a session."""
     return HTMLResponse((WEB_DIR / "verify.html").read_text())
+
+
+@router.get("/verify/{token}/address", response_class=HTMLResponse)
+def session_address_page(token: str) -> HTMLResponse:
+    """The address step of a session: an upload, not a capture."""
+    return HTMLResponse((WEB_DIR / "address.html").read_text())
 
 
 @router.get("/capture", response_class=HTMLResponse)

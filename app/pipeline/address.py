@@ -1,0 +1,289 @@
+"""Address proof pipeline.
+
+decode -> quality -> OCR -> is it the kind of proof they said -> is the address on
+it -> does it belong to the same person -> is it recent enough -> decision
+
+The checks are named as Shufti names them in its verification report, so a client
+holding one of their reports can map ours onto it line for line:
+
+  Address Document Proof                     -> address_document_proof
+  Address on Document Match                  -> address_on_document_match
+  Match Address Proofs With Document Proofs  -> match_address_proofs_with_document_proofs
+  Document Expiration                        -> address_document_expiration
+  Address Document Authenticity              -> address_document_authenticity
+
+Authenticity is reported as skipped rather than passed. Shufti runs a tamper check
+there; we have no model for it, and a blank check that reads as a pass in a report
+somebody relies on is worse than one that says plainly it was not run.
+"""
+
+import time
+from dataclasses import asdict
+from datetime import date
+
+from rapidfuzz import fuzz
+
+from app.engines.addresses import Places, is_po_box, normalise, read_places
+from app.engines.fields import find_dates
+from app.engines.image import InvalidImageError, decode_image
+from app.engines.ocr import read_document
+from app.engines.quality import assess_quality
+from app.pipeline.document import names_on_document
+from app.rules import address as rules
+from app.rules import places as place_rules
+from app.schemas.address import AddressCheckResponse, AddressExtracted, ProofType
+from app.schemas.document import CheckResult, CheckStatus, Decision
+
+
+def scan_address_proof(
+    proof_type: ProofType,
+    claimed_address: str,
+    front: bytes,
+    back: bytes | None = None,
+    names: list[str | None] | None = None,
+    today: date | None = None,
+) -> AddressCheckResponse:
+    """Judge one proof of address against the address the client gave us.
+
+    `names` are the names the document step *proved*, not what anybody typed. A
+    bill in somebody else's name proves where that person lives.
+    """
+    started = time.perf_counter()
+    today = today or date.today()
+    checks: list[CheckResult] = []
+    extracted = AddressExtracted(document_type=proof_type, full_address=claimed_address)
+
+    def finish() -> AddressCheckResponse:
+        return AddressCheckResponse(
+            decision=_decide(checks),
+            reasons=_unique(reason for check in checks for reason in check.reasons),
+            warnings=_unique(warning for check in checks for warning in check.warnings),
+            extracted=extracted,
+            checks=checks,
+            processing_ms=int((time.perf_counter() - started) * 1000),
+        )
+
+    # A PO box is refused before anything is read: it is not a place anybody
+    # lives, and our Shufti request says po_box: false for the same reason.
+    if is_po_box(claimed_address):
+        checks.append(
+            CheckResult(
+                name="address_on_document_match",
+                status=CheckStatus.failed,
+                reasons=["PO_BOX_NOT_ACCEPTED"],
+                details={"claimed": claimed_address},
+            )
+        )
+        return finish()
+
+    images = {}
+    for side, data in (("front", front), ("back", back)):
+        if data is None:
+            continue
+        try:
+            images[side] = decode_image(data)
+        except InvalidImageError:
+            checks.append(
+                CheckResult(
+                    name="address_document_proof",
+                    status=CheckStatus.failed,
+                    reasons=["IMAGE_UNREADABLE"],
+                )
+            )
+            return finish()
+
+    qualities = {side: assess_quality(image) for side, image in images.items()}
+    lines = [line.text for side in images for line in read_document(images[side])]
+
+    # Is there a document here at all? A bill is a page of print, so the test is
+    # whether enough text came back to read an address off.
+    readable = len(lines) >= rules.MIN_TEXT_LINES
+    checks.append(
+        CheckResult(
+            name="address_document_proof",
+            status=CheckStatus.passed if readable else CheckStatus.failed,
+            reasons=[] if readable else ["PROOF_NOT_READABLE"],
+            details={"text_lines": len(lines), "sides": sorted(images)},
+        )
+    )
+    for side, quality in qualities.items():
+        checks.append(
+            CheckResult(
+                name=f"quality_{side}",
+                status=CheckStatus.passed if readable or not quality.issues else CheckStatus.failed,
+                reasons=[] if readable else quality.issues,
+                warnings=quality.issues if readable else [],
+                details={key: value for key, value in asdict(quality).items() if key != "issues"},
+            )
+        )
+    if not readable:
+        return finish()
+
+    checks.append(_type_check(proof_type, lines))
+    checks.append(_address_check(claimed_address, lines, extracted))
+    checks.append(_owner_check(names or [], lines))
+    checks.append(_recency_check(lines, today, extracted))
+    checks.append(
+        CheckResult(
+            name="address_document_authenticity",
+            status=CheckStatus.skipped,
+            warnings=["AUTHENTICITY_NOT_CHECKED"],
+        )
+    )
+    return finish()
+
+
+def _decide(checks: list[CheckResult]) -> Decision:
+    if any(c.name == "address_document_proof" and c.status == CheckStatus.failed for c in checks):
+        # Nothing readable arrived: that is a photograph problem, not a refusal.
+        return Decision.retake
+    if any(c.status == CheckStatus.failed for c in checks):
+        return Decision.failed
+    if any(c.status == CheckStatus.review for c in checks):
+        return Decision.review
+    return Decision.passed
+
+
+def _unique(items) -> list[str]:
+    return list(dict.fromkeys(items))
+
+
+def _type_check(proof_type: ProofType, lines: list[str]) -> CheckResult:
+    """Does the document read like the kind of proof they said it was?
+
+    Sent to a person when it does not, rather than refused: a small local bill can
+    name none of the words on any list and still be a genuine bill.
+    """
+    text = normalise(" ".join(lines))
+    found = [word for word in rules.TYPE_WORDS[proof_type.value] if word in text]
+    return CheckResult(
+        name="address_document_type",
+        status=CheckStatus.passed if found else CheckStatus.review,
+        reasons=[] if found else ["PROOF_TYPE_MISMATCH"],
+        details={"declared": proof_type.value, "words_found": found[:8]},
+    )
+
+
+def _address_check(claimed: str, lines: list[str], extracted: AddressExtracted) -> CheckResult:
+    """Do the address and the document name the same place, at any level?
+
+    Pass or fail, nothing in between. Sharing a street is the strongest answer and
+    sharing a country the weakest, so the level that matched is recorded: a country
+    match means a Rwandan bill cleared a Rwandan address, which is worth seeing in
+    a report rather than hiding behind the word "pass".
+    """
+    wanted = read_places(claimed)
+    on_document = read_places(" ".join(lines))
+
+    matched_level, matched = _best_overlap(wanted, on_document)
+    extracted.matched_level = matched_level
+    extracted.matched_places = sorted(matched)
+
+    if matched_level is None:
+        return CheckResult(
+            name="address_on_document_match",
+            status=CheckStatus.failed,
+            reasons=["ADDRESS_NOT_ON_DOCUMENT"],
+            details={
+                "claimed": claimed,
+                "claimed_places": _as_dict(wanted),
+                "document_places": _as_dict(on_document),
+            },
+        )
+
+    return CheckResult(
+        name="address_on_document_match",
+        status=CheckStatus.passed,
+        # A country-level pass is thin evidence. It passes, and it says so.
+        warnings=["ADDRESS_MATCHED_ON_COUNTRY_ONLY"] if matched_level == place_rules.LEVEL_COUNTRY else [],
+        details={
+            "claimed": claimed,
+            "matched_level": matched_level,
+            "matched": sorted(matched),
+            "claimed_places": _as_dict(wanted),
+        },
+    )
+
+
+def _best_overlap(wanted: Places, on_document: Places) -> tuple[str | None, set[str]]:
+    """The strongest level at which the two sides name the same place."""
+    for level in place_rules.LEVELS:
+        shared = _shared(wanted.at(level), on_document.at(level))
+        if shared:
+            return level, shared
+    return None, set()
+
+
+def _shared(left: set[str], right: set[str]) -> set[str]:
+    """Places in both sets, allowing for OCR mangling a letter of a name."""
+    shared = left & right
+    for item in left - shared:
+        if any(fuzz.ratio(item, other) >= rules.PLACE_MATCH_SCORE for other in right):
+            shared.add(item)
+    return shared
+
+
+def _as_dict(found: Places) -> dict:
+    return {
+        "streets": sorted(found.streets),
+        "cities": sorted(found.cities),
+        "countries": sorted(found.countries),
+    }
+
+
+def _owner_check(names: list[str | None], lines: list[str]) -> CheckResult:
+    """Is the proof in the name of the person whose document we verified?
+
+    Shufti calls this matching the address proof against the document proof. The
+    names come from what the document step proved, so a bill in a landlord's or a
+    spouse's name fails, which is the point: it proves where they live.
+    """
+    if not any(names):
+        return CheckResult(
+            name="match_address_proofs_with_document_proofs",
+            status=CheckStatus.review,
+            reasons=["OWNER_NOT_VERIFIED"],
+            details={"looked_for": None},
+        )
+
+    found, missing = names_on_document(names, lines)
+    ok = bool(found) and not missing
+    return CheckResult(
+        name="match_address_proofs_with_document_proofs",
+        status=CheckStatus.passed if ok else CheckStatus.failed,
+        reasons=[] if ok else ["NAME_NOT_ON_ADDRESS_PROOF"],
+        details={
+            "looked_for": " ".join(name for name in names if name),
+            "matched": found,
+            "missing": missing,
+        },
+    )
+
+
+def _recency_check(lines: list[str], today: date, extracted: AddressExtracted) -> CheckResult:
+    """Is the proof recent enough to say where somebody lives now?
+
+    The newest date on the page that is not in the future, against the 90 days our
+    Shufti request asks for as document_validity. No date at all goes to a person:
+    plenty of genuine bills print one in a format nothing reads.
+    """
+    dates = [value for line in lines for value in find_dates(line, today) if value <= today]
+    if not dates:
+        return CheckResult(
+            name="address_document_expiration",
+            status=CheckStatus.review,
+            reasons=["PROOF_DATE_NOT_FOUND"],
+        )
+
+    issued = max(dates)
+    age_days = (today - issued).days
+    extracted.proof_date = issued
+    extracted.proof_age_days = age_days
+
+    fresh = age_days <= rules.MAX_PROOF_AGE_DAYS
+    return CheckResult(
+        name="address_document_expiration",
+        status=CheckStatus.passed if fresh else CheckStatus.failed,
+        reasons=[] if fresh else ["PROOF_TOO_OLD"],
+        details={"proof_date": issued, "age_days": age_days, "allowed_days": rules.MAX_PROOF_AGE_DAYS},
+    )

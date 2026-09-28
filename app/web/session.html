@@ -46,7 +46,7 @@ const token = location.pathname.split('/')[2];
 const WORDING = {
   document: ['Your document', 'A passport, national ID or driving licence'],
   face: ['Your face', 'A short check that you are really here'],
-  address: ['Your address', 'A bill or statement showing where you live'],
+  address: ['Your address', 'Upload a recent bill or statement in your name'],
   due_diligence: ['A few questions', 'Asked by the company checking you'],
   aml: ['Background check', 'Run by us, nothing for you to do'],
   consent: ['Your consent', 'Confirming you agree to be checked'],
@@ -54,6 +54,7 @@ const WORDING = {
 const PAGE = {
   document: `/verify/${token}/document`,
   face: `/verify/${token}/face`,
+  address: `/verify/${token}/address`,
 };
 
 async function load() {
