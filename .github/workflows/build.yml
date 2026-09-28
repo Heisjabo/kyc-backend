@@ -36,36 +36,68 @@ jobs:
 
       # Every value the service reads lives here. Anything added to
       # app/core/config.py that a deployment has to set has to be added to this
-      # list as well, or production runs on the default.
+      # list too, or production runs on the code's default.
       #
-      # The values are quoted, which matters for two of them: a service account
-      # private key and a whole JSON key both contain characters and newlines that
-      # would otherwise end the line early.
+      # The secrets arrive as environment variables rather than being pasted into
+      # the script. Two reasons: a value carrying a quote or a newline cannot break
+      # the script, and nothing from a secret is ever interpreted as shell.
+      #
+      # Only values that are actually set are written. An unset secret arrives as
+      # an empty string, and an empty string is not a valid int or bool, so writing
+      # SESSION_TTL_MINUTES= would stop the service from starting rather than let it
+      # fall back to its default. That is what the first deploy did.
       - name: Create .env from individual secrets
+        env:
+          ENVIRONMENT: ${{ secrets.ENVIRONMENT }}
+          ENABLE_DOCS: ${{ secrets.ENABLE_DOCS }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          REDIS_URL: ${{ secrets.REDIS_URL }}
+          JWT_SECRET: ${{ secrets.JWT_SECRET }}
+          SESSION_TTL_MINUTES: ${{ secrets.SESSION_TTL_MINUTES }}
+          MAX_SESSION_TTL_MINUTES: ${{ secrets.MAX_SESSION_TTL_MINUTES }}
+          GOOGLE_SERVICE_ACCOUNT_EMAIL: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_EMAIL }}
+          GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY }}
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+          GOOGLE_DRIVE_FOLDER_ID: ${{ secrets.GOOGLE_DRIVE_FOLDER_ID }}
+          GOOGLE_DRIVE_ROOT_FOLDER: ${{ secrets.GOOGLE_DRIVE_ROOT_FOLDER }}
+          EMAIL_ENABLED: ${{ secrets.EMAIL_ENABLED }}
+          DASHBOARD_URL: ${{ secrets.DASHBOARD_URL }}
+          WEB_CONCURRENCY: ${{ secrets.WEB_CONCURRENCY }}
+          RUN_MIGRATIONS: ${{ secrets.RUN_MIGRATIONS }}
         run: |
-          {
-            echo "ENVIRONMENT=${{ secrets.ENVIRONMENT }}";
-            echo "ENABLE_DOCS=${{ secrets.ENABLE_DOCS }}";
+          set -e
 
-            echo "DATABASE_URL=\"${{ secrets.DATABASE_URL }}\"";
-            echo "REDIS_URL=\"${{ secrets.REDIS_URL }}\"";
-            echo "JWT_SECRET=\"${{ secrets.JWT_SECRET }}\"";
+          # Without these three the service is not deployed, it is only running:
+          # no database, or a development JWT secret, or development mode in
+          # production. A deploy that half-works is worse than one that stops here.
+          missing=""
+          for name in ENVIRONMENT DATABASE_URL JWT_SECRET; do
+            [ -n "$(printenv "$name" || true)" ] || missing="$missing $name"
+          done
+          if [ -n "$missing" ]; then
+            echo "these secrets are not set in this repository:$missing"
+            exit 1
+          fi
 
-            echo "SESSION_TTL_MINUTES=${{ secrets.SESSION_TTL_MINUTES }}";
-            echo "MAX_SESSION_TTL_MINUTES=${{ secrets.MAX_SESSION_TTL_MINUTES }}";
+          : > .env
+          for name in \
+            ENVIRONMENT ENABLE_DOCS \
+            DATABASE_URL REDIS_URL JWT_SECRET \
+            SESSION_TTL_MINUTES MAX_SESSION_TTL_MINUTES \
+            GOOGLE_SERVICE_ACCOUNT_EMAIL GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY \
+            GOOGLE_SERVICE_ACCOUNT_JSON GOOGLE_DRIVE_FOLDER_ID GOOGLE_DRIVE_ROOT_FOLDER \
+            EMAIL_ENABLED DASHBOARD_URL \
+            WEB_CONCURRENCY RUN_MIGRATIONS
+          do
+            value="$(printenv "$name" || true)"
+            [ -n "$value" ] || continue
+            printf '%s=%s\n' "$name" "$value" >> .env
+          done
 
-            echo "GOOGLE_SERVICE_ACCOUNT_EMAIL=\"${{ secrets.GOOGLE_SERVICE_ACCOUNT_EMAIL }}\"";
-            echo "GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY=\"${{ secrets.GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY }}\"";
-            echo "GOOGLE_SERVICE_ACCOUNT_JSON=\"${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}\"";
-            echo "GOOGLE_DRIVE_FOLDER_ID=\"${{ secrets.GOOGLE_DRIVE_FOLDER_ID }}\"";
-            echo "GOOGLE_DRIVE_ROOT_FOLDER=\"${{ secrets.GOOGLE_DRIVE_ROOT_FOLDER }}\"";
-
-            echo "EMAIL_ENABLED=${{ secrets.EMAIL_ENABLED }}";
-            echo "DASHBOARD_URL=\"${{ secrets.DASHBOARD_URL }}\"";
-
-            echo "WEB_CONCURRENCY=${{ secrets.WEB_CONCURRENCY }}";
-            echo "RUN_MIGRATIONS=${{ secrets.RUN_MIGRATIONS }}";
-          } > .env
+          # Names only. The values are secrets and the log is readable by anybody
+          # who can see the repository.
+          echo "wrote $(wc -l < .env) settings:"
+          cut -d= -f1 .env | sed 's/^/  /'
 
       # The face models: about 200 MB that never change. Kept on the host and
       # mounted into the container, so a rebuild does not fetch them again. Only

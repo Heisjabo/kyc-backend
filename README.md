@@ -105,10 +105,24 @@ docker compose exec kyc-api alembic upgrade head
 | `WEB_CONCURRENCY` | workers, default 1. Each one loads SCRFD, ArcFace and the liveness mesh into its own memory |
 | `RUN_MIGRATIONS` | `true` only when a deploy should migrate |
 
-A secret left unset is written as an empty value, which for most of these means
-the default in `app/core/config.py`. Half-configured Drive settings stop the
-service at start-up and name what is missing, rather than failing at somebody's
-first document.
+**`ENVIRONMENT`, `DATABASE_URL` and `JWT_SECRET` are required**: without them the
+deploy stops and names the ones that are missing, because a service with no
+database, or running in development mode with the published signing key, is not
+deployed, only running.
+
+**The rest are optional and a secret left unset is simply not written**, so the
+default in `app/core/config.py` applies. That matters more than it sounds: an unset
+secret arrives as an empty string, and an empty string is not a valid integer or
+boolean, so writing `SESSION_TTL_MINUTES=` would stop the service from starting
+instead of falling back to 60. The first deploy of this service died exactly that
+way.
+
+**Values must be single-line.** Compose reads `.env` a line at a time, so the
+service account's private key goes in with its newlines written as `\n`, and a
+whole JSON key goes in on one line. Both are what Google gives you anyway.
+
+Half-configured Drive settings stop the service at start-up and name what is
+missing, rather than failing at somebody's first document.
 
 ## Database
 
