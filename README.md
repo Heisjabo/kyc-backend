@@ -253,6 +253,7 @@ holding one.
 | `/verify/{token}/document` | choose which document, then photograph it. The person's details are not asked for again: they came from the client at initiation, and nothing typed here is sent |
 | `/verify/{token}/face` | the liveness challenge and the portrait |
 | `/verify/{token}/address` | upload a bill or statement. An upload, not a capture: a bill is a file somebody already has |
+| `/verify/{token}/qr.svg` | the session link as a QR, drawn here rather than by a QR service: the token in it is the credential, and it is not going in somebody else's query string |
 
 `reference` is the client's own string, unique within their account, and it is
 what they look a customer up by. One is generated if they send none.
@@ -552,6 +553,14 @@ turns reached 47 and -58.
 on: on a capture where the person only turned, it wandered between -33 and +10
 degrees. Nodding would need a denser landmark model such as MediaPipe's 478-point
 mesh, which runs in the browser but crashes in its Python build on macOS.
+
+**Three seconds of video, not the whole check.** The page records the first
+`CLIP_SECONDS` (3) of the capture and stops itself, so a disputed result can be
+looked at by a person and a new model can be run over a real capture. Recording
+the whole challenge would mean holding a film of somebody's face in their own home
+for no reason anybody could point at. The server can only enforce the size of what
+arrives, since nothing here decodes video, so the length is decided by the page and
+`MAX_VIDEO_BYTES` keeps the file from being absurd.
 
 The sharpest frontal frame comes back as a cropped JPEG. This stops a printed
 photo, but not a recorded video or a fake camera feed; passive anti-spoofing is

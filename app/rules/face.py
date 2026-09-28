@@ -167,10 +167,19 @@ CALIBRATION_FRAMES = 4
 
 
 # The liveness clip. Kept so a disputed check can be reviewed by a person later,
-# and so a new model can be run over a real capture rather than a test set. A few
-# seconds at browser quality is about a megabyte; the ceiling is generous because
-# refusing the evidence would be worse than storing a large file.
-MAX_VIDEO_BYTES = 25 * 1024 * 1024
+# and so a new model can be run over a real capture rather than a test set.
+#
+# Three seconds, not the whole challenge. A clip long enough to show a live person
+# is all this needs to be; the rest is a recording of somebody's face in their own
+# home that we would be holding for no reason.
+CLIP_SECONDS = 3
+
+# Three seconds at the bitrate the page records at is a few hundred kilobytes.
+# This is the only limit the server can enforce by itself, since nothing here
+# decodes the file: a page that ignored the three seconds and sent a long clip at
+# a low bitrate would still get in. The page decides the length; this keeps the
+# file from being absurd.
+MAX_VIDEO_BYTES = 4 * 1024 * 1024
 ALLOWED_VIDEO_TYPES = {"video/webm", "video/mp4", "video/quicktime"}
 
 

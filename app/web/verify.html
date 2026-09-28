@@ -259,12 +259,20 @@ async function takePortrait() {
   return portraitBlob;
 }
 
-/** Record the challenge, so a disputed check can be looked at later. Nothing is
- *  stored yet, but the clip is produced and sent so that storage is the only
- *  thing left to add. */
+/** Record CLIP_SECONDS of the check, and only that, so a disputed result can be
+ *  looked at by a person later.
+ *
+ *  Three seconds is enough to show a live person moving. The whole challenge is
+ *  not: that would be a recording of somebody's face in their own home, kept for
+ *  no reason anybody could point at. The recorder stops itself, so the length
+ *  does not depend on how long the person takes over the movements. */
+const CLIP_SECONDS = 3;
+let clipTimer = null;
+
 function startRecording() {
   clipChunks = [];
   clipBlob = null;
+  clearTimeout(clipTimer);
   if (!window.MediaRecorder || !video.srcObject) return;
   const types = ['video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm', 'video/mp4'];
   const type = types.find((candidate) => MediaRecorder.isTypeSupported(candidate));
@@ -272,15 +280,30 @@ function startRecording() {
   try {
     recorder = new MediaRecorder(video.srcObject, { mimeType: type, videoBitsPerSecond: 800000 });
     recorder.ondataavailable = (event) => { if (event.data.size) clipChunks.push(event.data); };
+    recorder.onstop = () => {
+      // One blob, whether the timer stopped it or the check finished first. The
+      // first chunk carries the WebM header, so the clip is only playable when
+      // the chunks are kept from the start, which is why this records the first
+      // three seconds rather than the last three.
+      clipBlob = new Blob(clipChunks, { type: recorder.mimeType.split(';')[0] });
+    };
     recorder.start(1000);
+    clipTimer = setTimeout(() => {
+      if (recorder && recorder.state === 'recording') recorder.stop();
+    }, CLIP_SECONDS * 1000);
   } catch (error) { recorder = null; }
 }
 
 function stopRecording() {
+  clearTimeout(clipTimer);
   return new Promise((resolve) => {
-    if (!recorder || recorder.state === 'inactive') return resolve(null);
+    if (!recorder) return resolve(null);
+    // Already stopped by the timer: the three seconds are in hand.
+    if (recorder.state === 'inactive') return resolve(clipBlob);
+    // The check finished inside three seconds, so the clip is shorter than that.
+    const previous = recorder.onstop;
     recorder.onstop = () => {
-      clipBlob = new Blob(clipChunks, { type: recorder.mimeType.split(';')[0] });
+      previous();
       resolve(clipBlob);
     };
     recorder.stop();
