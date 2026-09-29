@@ -97,6 +97,7 @@ docker compose exec kyc-api alembic upgrade head
 | `JWT_SECRET` | long and random. The service refuses to start outside development with the published default |
 | `ENVIRONMENT` | `production` |
 | `ENABLE_DOCS` | `false` in production unless the docs are wanted in public |
+| `CORS_ORIGINS` | which browsers may call the API. Unset means `*`, any page anywhere. A comma separated list of origins narrows it |
 | `GOOGLE_SERVICE_ACCOUNT_EMAIL`, `GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY` | the key's `client_email` and `private_key`, newlines written as `\n` |
 | `GOOGLE_SERVICE_ACCOUNT_JSON` | or the whole key file on one line, instead of those two |
 | `GOOGLE_DRIVE_FOLDER_ID`, `GOOGLE_DRIVE_ROOT_FOLDER` | the Shared Drive folder, and the platform's folder inside it |

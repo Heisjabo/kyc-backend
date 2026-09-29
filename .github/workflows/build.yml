@@ -54,6 +54,7 @@ jobs:
         env:
           ENVIRONMENT: ${{ secrets.ENVIRONMENT }}
           ENABLE_DOCS: ${{ secrets.ENABLE_DOCS }}
+          CORS_ORIGINS: ${{ secrets.CORS_ORIGINS }}
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           REDIS_URL: ${{ secrets.REDIS_URL }}
           JWT_SECRET: ${{ secrets.JWT_SECRET }}
@@ -85,7 +86,7 @@ jobs:
 
           : > .env
           for name in \
-            ENVIRONMENT ENABLE_DOCS \
+            ENVIRONMENT ENABLE_DOCS CORS_ORIGINS \
             DATABASE_URL REDIS_URL JWT_SECRET \
             SESSION_TTL_MINUTES MAX_SESSION_TTL_MINUTES \
             GOOGLE_SERVICE_ACCOUNT_EMAIL GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY \

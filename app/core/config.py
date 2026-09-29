@@ -9,6 +9,16 @@ class Settings(BaseSettings):
     ENVIRONMENT: str = "development"
     ENABLE_DOCS: bool = True
 
+    # Which browsers may call this API. "*" is any page anywhere, which is what a
+    # verification journey served from its own domain needs, and it is the default.
+    # A comma separated list of origins narrows it without a release.
+    #
+    # Credentials stay off whatever this says: no browser allows them with a
+    # wildcard, and nothing here authenticates with a cookie. A call is authorised
+    # by the session token in its URL or by an API key in a header, and neither is
+    # something a browser attaches on its own.
+    CORS_ORIGINS: str = "*"
+
     # Downloaded once from the OpenCV model zoo; see README.
     FACE_DETECTOR_MODEL: str = "models/face_detection_yunet_2023mar.onnx"
     # MediaPipe's 478-point face mesh bundle, used for liveness (head pose and

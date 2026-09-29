@@ -1,0 +1,116 @@
+nginx for the KYC platform
+==========================
+
+Two hostnames on srv1022241 (45.9.188.3):
+
+  pangolinkyc-api.tuesday.africa  ->  127.0.0.1:4500   the API, running now
+  pangolinkyc.tuesday.africa      ->  127.0.0.1:4501   the journey, not deployed yet
+
+4501 is free: taken on that machine are 3000, 3001, 3030, 4000, 4001, 4002, 4500,
+5000, 5001, 7000, 9000, 10000.
+
+DNS, both as A records:
+
+  pangolinkyc-api   A   45.9.188.3
+  pangolinkyc       A   45.9.188.3
+
+Grey cloud (DNS only) in Cloudflare while certbot runs, or the HTTP-01 challenge
+fights the proxy.
+
+No TLS lines below: certbot --nginx adds the 443 listener, the certificate paths and
+the redirect itself.
+
+
+/etc/nginx/sites-available/pangolinkyc-api
+------------------------------------------
+
+server {
+    listen 80;
+    listen [::]:80;
+    server_name pangolinkyc-api.tuesday.africa;
+
+    # Documents and PDFs are capped at 10 MB by the service. nginx defaults to 1 MB,
+    # so without this every upload is refused with a 413 that never reaches the app
+    # and leaves nothing in its log.
+    client_max_body_size 12M;
+
+    location / {
+        proxy_pass http://127.0.0.1:4500;
+        proxy_http_version 1.1;
+
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        # Load-bearing. uvicorn runs with --proxy-headers, and this is what makes the
+        # service build https://pangolinkyc-api.tuesday.africa/verify/... instead of
+        # http:// with the container's own hostname. Every session link and QR
+        # depends on it.
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host  $host;
+
+        # A document scan is OCR plus a face match, and the first request after a
+        # deploy also loads three models. The 60s defaults would cut those off.
+        proxy_connect_timeout 10s;
+        proxy_send_timeout    180s;
+        proxy_read_timeout    180s;
+    }
+}
+
+
+/etc/nginx/sites-available/pangolinkyc
+--------------------------------------
+
+server {
+    listen 80;
+    listen [::]:80;
+    server_name pangolinkyc.tuesday.africa;
+
+    # The journey uploads a document and a proof of address.
+    client_max_body_size 12M;
+
+    location / {
+        proxy_pass http://127.0.0.1:4501;
+        proxy_http_version 1.1;
+
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host  $host;
+
+        # For whatever websocket the app opens.
+        proxy_set_header Upgrade           $http_upgrade;
+        proxy_set_header Connection        "upgrade";
+
+        proxy_read_timeout 120s;
+    }
+}
+
+
+Commands, in order
+------------------
+
+ln -sf /etc/nginx/sites-available/pangolinkyc-api /etc/nginx/sites-enabled/pangolinkyc-api
+
+ln -sf /etc/nginx/sites-available/pangolinkyc /etc/nginx/sites-enabled/pangolinkyc
+
+nginx -t && systemctl reload nginx
+
+certbot --nginx -d pangolinkyc-api.tuesday.africa -d pangolinkyc.tuesday.africa
+
+curl -s https://pangolinkyc-api.tuesday.africa/v1/health
+
+
+Notes
+-----
+
+- Put both server blocks in before running certbot, even though nothing answers on
+  4501 yet, so one run covers both names and the frontend's certificate is waiting.
+  That hostname returns 502 until a container is there, which is expected.
+- If this nginx uses conf.d rather than sites-available, write the two blocks to
+  /etc/nginx/conf.d/pangolinkyc-api.conf and /etc/nginx/conf.d/pangolinkyc.conf and
+  skip the two ln lines.
+- Once the journey is on pangolinkyc.tuesday.africa calling the API on the other
+  hostname, the browser will block it until CORS is added to app/main.py, and
+  session_url needs VERIFY_BASE_URL so links point at the journey rather than the
+  API. Neither is nginx's job.
