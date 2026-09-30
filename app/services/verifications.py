@@ -129,13 +129,14 @@ def create_verification(
 
     token = secrets.token_urlsafe(32)
     ttl = ttl_minutes or settings.SESSION_TTL_MINUTES
+    domain = settings.VERIFY_BASE_URL.strip() if settings.VERIFY_BASE_URL else base_url
 
     verification = Verification(
         account_id=account_id,
         applicant_id=applicant.id,
         reference=reference or new_reference(),
         session_token=token,
-        session_url=f"{base_url.rstrip('/')}/verify/{token}",
+        session_url=f"{domain.rstrip('/')}/verify/{token}",
         status=VerificationStatus.pending,
         event=EVENT_RECEIVED,
         services=services,

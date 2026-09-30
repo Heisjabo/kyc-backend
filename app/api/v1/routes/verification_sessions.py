@@ -46,13 +46,20 @@ def _as_response(verification: Verification) -> VerificationResponse:
         if current is None or step.attempt > current.attempt:
             latest[step.step] = step
 
+    from app.core.config import settings
+    session_url = (
+        f"{settings.VERIFY_BASE_URL.strip().rstrip('/')}/verify/{verification.session_token}"
+        if settings.VERIFY_BASE_URL
+        else verification.session_url
+    )
+
     return VerificationResponse(
         reference=verification.reference,
         customer_id=verification.applicant.customer_id if verification.applicant else None,
         status=verification.status.value,
         event=verification.event,
         services=verification.services,
-        session_url=verification.session_url,
+        session_url=session_url,
         country=verification.country,
         language=verification.language,
         reasons=verification.reasons,
