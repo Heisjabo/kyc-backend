@@ -104,8 +104,16 @@ jobs:
           fi
 
           : > .env
-          for name in $(printenv | sed -n 's/^SETTING_\([A-Za-z0-9_]*\)=.*/\1/p' | sort -u); do
-            value="$(printenv "SETTING_$name" || true)"
+          for name in \
+            ENVIRONMENT ENABLE_DOCS CORS_ORIGINS \
+            DATABASE_URL REDIS_URL JWT_SECRET \
+            SESSION_TTL_MINUTES MAX_SESSION_TTL_MINUTES \
+            GOOGLE_SERVICE_ACCOUNT_EMAIL GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY \
+            GOOGLE_SERVICE_ACCOUNT_JSON GOOGLE_DRIVE_FOLDER_ID GOOGLE_DRIVE_ROOT_FOLDER \
+            EMAIL_ENABLED DASHBOARD_URL \
+            WEB_CONCURRENCY RUN_MIGRATIONS \ VERIFY_BASE_URL
+          do
+            value="$(printenv "$name" || true)"
             [ -n "$value" ] || continue
             printf '%s=%s\n' "$name" "$value" >> .env
           done
