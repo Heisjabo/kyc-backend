@@ -326,4 +326,41 @@ def settle(db: Session, verification: Verification) -> Verification:
     verification.warnings = list(dict.fromkeys(warnings))
     db.commit()
     db.refresh(verification)
+
+    _fire_callback(db, verification)
+
     return verification
+
+
+def _fire_callback(db: Session, verification: Verification) -> None:
+    if not verification.callback_url:
+        return
+
+    steps_data = []
+    for step in verification.steps:
+        steps_data.append({
+            "step": step.step.value if hasattr(step.step, "value") else str(step.step),
+            "status": step.status.value if hasattr(step.status, "value") else str(step.status),
+            "reasons": step.reasons or [],
+        })
+
+    payload = {
+        "reference": verification.reference,
+        "status": verification.status.value if hasattr(verification.status, "value") else str(verification.status),
+        "event": verification.event,
+        "reasons": verification.reasons or [],
+        "steps": steps_data,
+    }
+
+    url = verification.callback_url
+    def _send():
+        try:
+            import httpx
+            with httpx.Client(timeout=5.0) as client:
+                client.post(url, json=payload)
+        except Exception as e:
+            print(f"[kyc-backend] Callback POST to {url} failed: {e}")
+
+    import threading
+    threading.Thread(target=_send, daemon=True).start()
+

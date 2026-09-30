@@ -47,6 +47,15 @@ class Stored:
     sha256: str
 
 
+def _keep_local(verification_id: int | str, name: str, data: bytes, kind: str) -> str:
+    key = f"{verification_id}/{name}"
+    path = Path(settings.EVIDENCE_DIR) / key
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(data)
+    logger.info("kept %s for verification %s locally: %d bytes", kind, verification_id, len(data))
+    return key
+
+
 def keep(
     verification_id: int | str, data: bytes, kind: str, content_type: str = "image/jpeg"
 ) -> Stored | None:
@@ -61,14 +70,15 @@ def keep(
     digest = hashlib.sha256(data).hexdigest()
     name = f"{kind}-{digest[:12]}{_EXTENSIONS.get(content_type, '.bin')}"
 
+    key = None
     if _on_drive():
-        key = drive.upload(verification_id, name, data, content_type)
-    else:
-        key = f"{verification_id}/{name}"
-        path = Path(settings.EVIDENCE_DIR) / key
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(data)
-        logger.info("kept %s for verification %s: %d bytes", kind, verification_id, len(data))
+        try:
+            key = drive.upload(verification_id, name, data, content_type)
+        except Exception as err:
+            logger.warning("Google Drive upload failed (%s); falling back to local storage", err)
+
+    if not key:
+        key = _keep_local(verification_id, name, data, kind)
 
     return Stored(storage_key=key, content_type=content_type, byte_size=len(data), sha256=digest)
 
@@ -77,7 +87,12 @@ def read(storage_key: str) -> bytes | None:
     """The bytes back, for the API to serve or the report to embed. None when the
     file is gone, which a retention rule is allowed to do."""
     if _on_drive():
-        return drive.download(storage_key)
+        try:
+            data = drive.download(storage_key)
+            if data is not None:
+                return data
+        except Exception:
+            pass
     path = Path(settings.EVIDENCE_DIR) / storage_key
     return path.read_bytes() if path.is_file() else None
 
@@ -85,7 +100,10 @@ def read(storage_key: str) -> bytes | None:
 def remove(storage_key: str) -> bool:
     """Delete one piece of evidence."""
     if _on_drive():
-        return drive.delete(storage_key)
+        try:
+            return drive.delete(storage_key)
+        except Exception:
+            pass
     path = Path(settings.EVIDENCE_DIR) / storage_key
     if not path.is_file():
         return False

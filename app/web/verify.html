@@ -57,6 +57,12 @@
       </aside>
     </div>
 
+    <div id="redirect-section" style="margin: 1.5rem 0; padding: 1.25rem; background: rgba(37, 99, 235, 0.15); border: 1px solid #3b82f6; border-radius: 10px; text-align: center;" hidden>
+      <p style="margin: 0 0 0.5rem 0; font-weight: bold; color: #60a5fa; font-size: 1.1rem;">Verification Complete!</p>
+      <p style="margin: 0 0 1rem 0; font-size: 0.9rem; color: #cbd5e1;">Redirecting back to application in 2 seconds...</p>
+      <a id="redirect-btn" style="display: inline-block; padding: 0.6rem 1.4rem; background: #2563eb; color: white; text-decoration: none; border-radius: 6px; font-weight: bold;" href="#">Return to Application</a>
+    </div>
+
     <button id="again">Try again</button>
     <details><summary>Head pose per frame</summary><pre id="poses"></pre></details>
     <details><summary>Full response</summary><pre id="json"></pre></details>
@@ -136,9 +142,18 @@ let recorder = null, clipChunks = [], clipBlob = null;
 let documentType = null;      // a birth certificate means a child's check
 let claimed = [];   // {index, step}: which frame the guidance accepted for which step
 let cancelled = false;
+let sessionRedirectUrl = null;
 
 async function loadSession() {
   if (SESSION_TOKEN) {
+    try {
+      const sessRes = await fetch(`/v1/sessions/${SESSION_TOKEN}`);
+      if (sessRes.ok) {
+        const sessData = await sessRes.json();
+        if (sessData.redirect_url) sessionRedirectUrl = sessData.redirect_url;
+      }
+    } catch (e) {}
+
     // The document was read moments ago in this same session, so show the face
     // we cut from it rather than an empty panel.
     const portrait = document.getElementById('document-face');
@@ -580,6 +595,19 @@ function show(body, ok) {
   stageResult.hidden = false;
   document.getElementById('start').disabled = false;
   window.scrollTo({ top: 0, behavior: 'smooth' });
+
+  const targetRedirect = body.redirect_url || sessionRedirectUrl;
+  if (targetRedirect && (body.decision === 'pass' || ok)) {
+    const section = document.getElementById('redirect-section');
+    const btn = document.getElementById('redirect-btn');
+    if (section && btn) {
+      btn.href = targetRedirect;
+      section.hidden = false;
+    }
+    setTimeout(() => {
+      window.location.href = targetRedirect;
+    }, 2000);
+  }
 }
 
 document.getElementById('start').addEventListener('click', async () => {

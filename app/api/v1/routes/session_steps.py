@@ -522,6 +522,7 @@ def submit_face(
         match=match,
         document=None,
         processing_ms=int((time.perf_counter() - started) * 1000),
+        redirect_url=verification.redirect_url,
     )
 
 
