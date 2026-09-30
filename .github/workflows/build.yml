@@ -38,90 +38,75 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # Every value the service reads lives here. Anything added to
-      # app/core/config.py that a deployment has to set has to be added to this
-      # list too, or production runs on the code's default.
+      # Written the way tuesday-backend writes it: one echo per setting, naming the
+      # secret and writing it on the same line. A setting added to
+      # app/core/config.py that a deployment has to set is added here, once.
       #
-      # The secrets arrive as environment variables rather than being pasted into
-      # the script. Two reasons: a value carrying a quote or a newline cannot break
-      # the script, and nothing from a secret is ever interpreted as shell.
-      #
-      # Only values that are actually set are written. An unset secret arrives as
-      # an empty string, and an empty string is not a valid int or bool, so writing
-      # SESSION_TTL_MINUTES= would stop the service from starting rather than let it
-      # fall back to its default. That is what the first deploy did.
-      # Every value the service reads comes from here. A setting added to
-      # app/core/config.py that a deployment has to set is added here, once: the
-      # names below are the only list, and the script derives what to write from
-      # them. It used to be spelled out twice, in this block and again in the loop,
-      # and the two drifted: VERIFY_BASE_URL was added to one and not the other, so
-      # the secret reached the runner and never reached the container.
-      #
-      # The SETTING_ prefix is what lets the script find them among the runner's own
-      # hundred environment variables. It is stripped before writing.
-      #
-      # Secrets arrive as environment variables rather than being pasted into the
-      # script: a value carrying a quote or a newline cannot break it, and nothing
-      # from a secret is ever interpreted as shell.
-      #
-      # Only values that are set are written. An unset secret arrives as an empty
-      # string, and an empty string is not a valid int or bool, so writing
-      # SESSION_TTL_MINUTES= would stop the service from starting rather than let it
-      # fall back to its default. That is what the first deploy did.
+      # It was briefly a list in an env block plus a second list in the script, and
+      # the two drifted twice in two days: VERIFY_BASE_URL went into one and not the
+      # other, then the script was left asking for names that no longer existed. The
+      # second time, .env came out empty and the service ran on its defaults against
+      # a database on localhost while the health check passed.
       - name: Create .env from individual secrets
-        env:
-          SETTING_ENVIRONMENT: ${{ secrets.ENVIRONMENT }}
-          SETTING_ENABLE_DOCS: ${{ secrets.ENABLE_DOCS }}
-          SETTING_CORS_ORIGINS: ${{ secrets.CORS_ORIGINS }}
-          SETTING_DATABASE_URL: ${{ secrets.DATABASE_URL }}
-          SETTING_REDIS_URL: ${{ secrets.REDIS_URL }}
-          SETTING_JWT_SECRET: ${{ secrets.JWT_SECRET }}
-          SETTING_SESSION_TTL_MINUTES: ${{ secrets.SESSION_TTL_MINUTES }}
-          SETTING_MAX_SESSION_TTL_MINUTES: ${{ secrets.MAX_SESSION_TTL_MINUTES }}
-          SETTING_GOOGLE_SERVICE_ACCOUNT_EMAIL: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_EMAIL }}
-          SETTING_GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY }}
-          SETTING_GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
-          SETTING_GOOGLE_DRIVE_FOLDER_ID: ${{ secrets.GOOGLE_DRIVE_FOLDER_ID }}
-          SETTING_GOOGLE_DRIVE_ROOT_FOLDER: ${{ secrets.GOOGLE_DRIVE_ROOT_FOLDER }}
-          SETTING_EMAIL_ENABLED: ${{ secrets.EMAIL_ENABLED }}
-          SETTING_DASHBOARD_URL: ${{ secrets.DASHBOARD_URL }}
-          SETTING_VERIFY_BASE_URL: ${{ secrets.VERIFY_BASE_URL }}
-          SETTING_WEB_CONCURRENCY: ${{ secrets.WEB_CONCURRENCY }}
-          SETTING_RUN_MIGRATIONS: ${{ secrets.RUN_MIGRATIONS }}
         run: |
           set -e
 
-          # Without these three the service is not deployed, it is only running: no
-          # database, or a development JWT secret, or development mode in production.
-          # A deploy that half-works is worse than one that stops here.
-          missing=""
-          for name in ENVIRONMENT DATABASE_URL JWT_SECRET; do
-            [ -n "$(printenv "SETTING_$name" || true)" ] || missing="$missing $name"
-          done
-          if [ -n "$missing" ]; then
-            echo "these secrets are not set in this repository:$missing"
-            exit 1
-          fi
+          {
+            echo "ENVIRONMENT=${{ secrets.ENVIRONMENT }}";
+            echo "ENABLE_DOCS=${{ secrets.ENABLE_DOCS }}";
+            echo "CORS_ORIGINS=${{ secrets.CORS_ORIGINS }}";
 
-          : > .env
-          for name in \
-            ENVIRONMENT ENABLE_DOCS CORS_ORIGINS \
-            DATABASE_URL REDIS_URL JWT_SECRET \
-            SESSION_TTL_MINUTES MAX_SESSION_TTL_MINUTES \
-            GOOGLE_SERVICE_ACCOUNT_EMAIL GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY \
-            GOOGLE_SERVICE_ACCOUNT_JSON GOOGLE_DRIVE_FOLDER_ID GOOGLE_DRIVE_ROOT_FOLDER \
-            EMAIL_ENABLED DASHBOARD_URL \
-            WEB_CONCURRENCY RUN_MIGRATIONS VERIFY_BASE_URL
-          do
-            value="$(printenv "$name" || true)"
-            [ -n "$value" ] || continue
-            printf '%s=%s\n' "$name" "$value" >> .env
-          done
+            echo "DATABASE_URL=${{ secrets.DATABASE_URL }}";
+            echo "REDIS_URL=${{ secrets.REDIS_URL }}";
+            echo "JWT_SECRET=${{ secrets.JWT_SECRET }}";
+
+            echo "SESSION_TTL_MINUTES=${{ secrets.SESSION_TTL_MINUTES }}";
+            echo "MAX_SESSION_TTL_MINUTES=${{ secrets.MAX_SESSION_TTL_MINUTES }}";
+
+            echo "GOOGLE_SERVICE_ACCOUNT_EMAIL=${{ secrets.GOOGLE_SERVICE_ACCOUNT_EMAIL }}";
+            echo "GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY=${{ secrets.GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY }}";
+            echo "GOOGLE_SERVICE_ACCOUNT_JSON=${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}";
+            echo "GOOGLE_DRIVE_FOLDER_ID=${{ secrets.GOOGLE_DRIVE_FOLDER_ID }}";
+            echo "GOOGLE_DRIVE_ROOT_FOLDER=${{ secrets.GOOGLE_DRIVE_ROOT_FOLDER }}";
+
+            echo "VERIFY_BASE_URL=${{ secrets.VERIFY_BASE_URL }}";
+            echo "EMAIL_ENABLED=${{ secrets.EMAIL_ENABLED }}";
+            echo "DASHBOARD_URL=${{ secrets.DASHBOARD_URL }}";
+
+            echo "WEB_CONCURRENCY=${{ secrets.WEB_CONCURRENCY }}";
+            echo "RUN_MIGRATIONS=${{ secrets.RUN_MIGRATIONS }}";
+          } > .env.all
+
+          # The one thing tuesday-backend does not have to do, and the only reason
+          # this step is not just the block above. pydantic refuses an empty string
+          # where an int or a bool belongs, so an unset secret arriving as
+          # SESSION_TTL_MINUTES= stops the service instead of letting it fall back to
+          # 60. NestJS reads '' and carries on. So lines with no value are dropped,
+          # and an unset secret means the default in app/core/config.py.
+          # `|| true` because grep exits 1 when it matches nothing, which under set -e
+          # would kill the step with no message in the one case that matters most:
+          # every secret empty.
+          grep -v '=$' .env.all > .env || true
+          rm .env.all
 
           # Names only. The values are secrets and this log is readable by anybody
           # who can see the repository.
           echo "wrote $(wc -l < .env) settings:"
           cut -d= -f1 .env | sed 's/^/  /'
+
+          # Then read the file back. Without these three the service is not deployed,
+          # it is only running: no database, development mode, the published signing
+          # key. An empty .env does not fail on its own, it starts the service on every
+          # default and the health check still passes, which is how a day went by with
+          # every real request returning 500.
+          missing=""
+          for name in ENVIRONMENT DATABASE_URL JWT_SECRET; do
+            grep -q "^$name=" .env || missing="$missing $name"
+          done
+          if [ -n "$missing" ]; then
+            echo "these settings did not reach .env:$missing"
+            exit 1
+          fi
 
       # The face models: about 200 MB that never change. Kept on the host and
       # mounted into the container, so a rebuild does not fetch them again. Only

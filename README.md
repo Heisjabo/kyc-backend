@@ -89,9 +89,14 @@ docker compose exec kyc-api alembic upgrade head
 ```
 
 **Secrets the workflow expects**, all in the repository's Actions secrets. Each one
-is named once, in the deploy step's `env:` block as `SETTING_<NAME>`, and the script
-derives what to write from those names: adding a setting is one line, and it cannot
-be half-added.
+is named once, as an `echo` line in the deploy step, the way tuesday-backend does it.
+Adding a setting is one line. Two things happen after those lines are written, and
+both exist because of a real failure: lines with no value are dropped, since pydantic
+refuses an empty string where an int or a bool belongs and would stop the service
+rather than fall back to its default, and the file is read back to confirm
+`ENVIRONMENT`, `DATABASE_URL` and `JWT_SECRET` actually landed in it. An empty `.env`
+does not fail on its own: it starts the service on every default, pointed at a
+database on localhost, while the health check still passes.
 
 | | |
 |---|---|
