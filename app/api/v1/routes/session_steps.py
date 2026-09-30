@@ -481,6 +481,9 @@ def submit_face(
         )
 
     warnings = list(match.check.warnings)
+    # A middling AI-generated score passes liveness with a warning; it travels to
+    # the step so a reviewer sees it next to the match.
+    warnings += [warning for warning in liveness.warnings if warning == "AI_GENERATED_SUSPECTED"]
     if duplicate is not None:
         # A warning, never a failure: the same face on another person's record is
         # worth a human looking, and is not proof of anything by itself.

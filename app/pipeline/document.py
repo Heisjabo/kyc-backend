@@ -17,12 +17,13 @@ import cv2
 import numpy as np
 from rapidfuzz import fuzz
 
-from app.engines.face import detect_faces
+from app.engines.face import detect_faces, portrait
 from app.engines.fields import VisualFields, extract_visual_fields, to_alpha3
 from app.engines.image import InvalidImageError, decode_image
 from app.engines.mrz import MrzResult, parse_mrz_text, read_mrz
 from app.engines.ocr import read_document
 from app.engines.quality import assess_quality
+from app.pipeline.ai_image import check_ai_generated
 from app.pipeline.document_probe import _looks_sideways
 from app.rules import document as rules
 from app.schemas.document import (
@@ -119,6 +120,11 @@ def scan_document(
     if not detected:
         return finish()
 
+    # 4b. Was the document, or the face on it, made by a generator? Front and back
+    #     as received, and the portrait cut from the front, since a forger may
+    #     generate only the face and paste it onto a real card.
+    checks.append(check_ai_generated(_ai_images(images), subject="document"))
+
     # 5. MRZ: first from the OCR text, then Tesseract as a second reader.
     mrz = _find_mrz(document_type, images, ocr_lines)
     if mrz is not None:
@@ -165,6 +171,16 @@ def scan_document(
         checks.append(_dob_check(applicant.date_of_birth, extracted, visual, use_mrz))
 
     return finish()
+
+
+def _ai_images(images: dict) -> list[tuple[str, object]]:
+    candidates = list(images.items())
+    front = images.get("front")
+    if front is not None:
+        faces = detect_faces(front)
+        if faces:
+            candidates.append(("portrait", portrait(front, max(faces, key=lambda f: f.width * f.height))))
+    return candidates
 
 
 def _unique(items) -> list[str]:

@@ -22,6 +22,11 @@ unzip -j -o /tmp/buffalo_l.zip 'det_10g.onnx' 'w600k_r50.onnx' -d models/
 # MediaPipe face landmarker (~3.8 MB), the 478-point mesh used for liveness
 curl -sL -o models/face_landmarker.task \
   https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/latest/face_landmarker.task
+
+# AI-generated image detector (~87 MB), Community Forensics ViT-S. Optional: without
+# it the ai_generated check is skipped. Pinned to the author's corrected export.
+curl -sL -o models/ai_image_detector.onnx \
+  https://huggingface.co/buildborderless/CommunityForensics-DeepfakeDet-ViT/resolve/ac6ee457bea904a373065754107451793b56db00/onnx/model.onnx
 ```
 
 Expected SHA-256:
@@ -29,7 +34,36 @@ Expected SHA-256:
 ```
 5838f7fe053675b1c7a08b633df49e7af5495cee0493c7dcf6697200b85b5b91  det_10g.onnx
 4c06341c33c2ca1f86781dab0e829f88ad5b64be9fba56e56bc9ebdefc619e43  w600k_r50.onnx
+a42c7d740fbb345ba9a26d469b22f301d73089ce3c6da993877ed2b6965a8ba1  ai_image_detector.onnx
 ```
+
+### AI-generated image detection
+
+The document step and liveness both run an `ai_generated` check: was this image made
+by a generator? It uses the detector from *Community Forensics: Using Thousands of
+Generators to Train Fake Image Detectors* (Park and Owens, CVPR 2025, MIT), trained on
+images from 4,803 generators.
+
+- **Document:** the front, the back and the portrait on the front are scored, and the
+  highest score counts, since a forger may generate only the face.
+- **Liveness:** the still and two frames through the capture are scored, and the
+  median counts: a deepfake stream is generated in every frame.
+- **Verdict:** at `AI_IMAGE_REJECT_THRESHOLD` (0.9) the step fails with
+  `AI_GENERATED_DOCUMENT` or `AI_GENERATED_FACE`. From `AI_IMAGE_REVIEW_THRESHOLD`
+  (0.5) a document goes to review and a face passes with the warning
+  `AI_GENERATED_SUSPECTED`. Both are settings.
+- Images under 256 pixels on the shorter side are not scored: the detector enlarges
+  everything, and enlargement alone moves the score.
+
+On public test images, real photographs stayed under 0.05 and GAN faces scored 0.99 to
+1.0, through resizing and JPEG compression. It can miss diffusion images, particularly
+once they have been resized or recompressed, and it flags photos run through
+generative "enhance" apps. It is one signal alongside liveness and face match, not a
+guarantee; tune the thresholds on real submissions.
+
+Use the pinned file above. The older export of the same model, which search results
+and the onnx-community mirror point to, was built from the wrong weights with an
+untrained head and scores noise.
 
 ## Run locally
 
