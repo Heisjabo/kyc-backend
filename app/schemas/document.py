@@ -89,6 +89,6 @@ class DocumentFrameProbe(BaseModel):
     blur_score: float | None = None
     brightness: float | None = None
     glare_ratio: float | None = None
-    # FIT_THE_CARD_IN_THE_BOX, TURN_THE_CARD_UPRIGHT, PORTRAIT_NOT_VISIBLE,
+    # FIT_THE_CARD_IN_THE_BOX, TURN_THE_CARD_UPRIGHT, SHOW_THE_BACK, PORTRAIT_NOT_VISIBLE,
     # MOVE_CLOSER, TOO_DARK, TOO_BRIGHT, GLARE_ON_THE_CARD, HOLD_STILL
     hints: list[str] = []
