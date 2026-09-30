@@ -194,6 +194,7 @@ def submit_document(
     )
 
     extracted = result.extracted.model_dump(mode="json") if result.extracted else {}
+    extracted["document_type"] = document_type.value
 
     _keep_file(db, verification, step, FileKind.document_front, front_bytes, front.content_type)
     if back_bytes:
@@ -228,7 +229,7 @@ def submit_document(
             warnings=warnings,
             checks=[check.model_dump(mode="json") for check in result.checks],
             processing_ms=int((time.perf_counter() - started) * 1000),
-            **{key: value for key, value in extracted.items() if key != "source"},
+            **{key: value for key, value in extracted.items() if key not in ("source", "document_type")},
             source=extracted.get("source"),
         )
     )

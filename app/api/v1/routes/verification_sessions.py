@@ -154,6 +154,73 @@ def read_verification(
     return _as_response(service.expire_if_due(db, verification))
 
 
+_KIND_ALIASES = {
+    "front": FileKind.document_front,
+    "back": FileKind.document_back,
+    "selfie": FileKind.portrait,
+    "portrait": FileKind.portrait,
+    "document_front": FileKind.document_front,
+    "document_back": FileKind.document_back,
+    "document_portrait": FileKind.document_portrait,
+}
+
+
+@router.get("/verifications/{reference}/files/{kind}")
+def read_verification_file(
+    reference: str,
+    kind: str,
+    account: Account = Depends(account_from_api_key),
+    db: Session = Depends(get_session),
+):
+    """Fetch the raw image for a verified document or selfie."""
+    verification = service.by_reference(db, account.id, reference)
+    if verification is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "No verification with that reference")
+
+    file_kind = _KIND_ALIASES.get(kind.lower())
+    if file_kind is None:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Unknown file kind {kind!r}")
+
+    file = db.scalar(
+        select(VerificationFile)
+        .where(
+            VerificationFile.verification_id == verification.id,
+            VerificationFile.kind == file_kind,
+        )
+        .order_by(VerificationFile.id.desc())
+    )
+    if file is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"No {kind} file recorded for this verification")
+
+    data = evidence.read(file.storage_key)
+    if data is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "That file is no longer stored")
+    return Response(content=data, media_type=file.content_type)
+
+
+@router.get("/verifications/{reference}/files")
+def list_verification_files(
+    reference: str,
+    account: Account = Depends(account_from_api_key),
+    db: Session = Depends(get_session),
+):
+    """List all available evidence files for a verification."""
+    verification = service.by_reference(db, account.id, reference)
+    if verification is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "No verification with that reference")
+
+    files = db.scalars(
+        select(VerificationFile)
+        .where(VerificationFile.verification_id == verification.id)
+        .order_by(VerificationFile.id.asc())
+    ).all()
+
+    return {
+        f.kind.value: f"/v1/verifications/{reference}/files/{f.kind.value}"
+        for f in files
+    }
+
+
 @router.get("/sessions/{token}/document-portrait")
 def session_document_portrait(token: str, db: Session = Depends(get_session)):
     """The face cut from the document this session already read.
