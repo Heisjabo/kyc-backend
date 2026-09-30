@@ -88,7 +88,10 @@ not something to find out about afterwards. Run them yourself:
 docker compose exec kyc-api alembic upgrade head
 ```
 
-**Secrets the workflow expects**, all in the repository's Actions secrets:
+**Secrets the workflow expects**, all in the repository's Actions secrets. Each one
+is named once, in the deploy step's `env:` block as `SETTING_<NAME>`, and the script
+derives what to write from those names: adding a setting is one line, and it cannot
+be half-added.
 
 | | |
 |---|---|
@@ -97,6 +100,7 @@ docker compose exec kyc-api alembic upgrade head
 | `JWT_SECRET` | long and random. The service refuses to start outside development with the published default |
 | `ENVIRONMENT` | `production` |
 | `ENABLE_DOCS` | `false` in production unless the docs are wanted in public |
+| `VERIFY_BASE_URL` | where the person's journey is served, e.g. `https://pangolinkyc.tuesday.africa`. Unset means session links are built from the host the request arrived on, which is the API's own host |
 | `CORS_ORIGINS` | which browsers may call the API. Unset means `*`, any page anywhere. A comma separated list of origins narrows it |
 | `GOOGLE_SERVICE_ACCOUNT_EMAIL`, `GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY` | the key's `client_email` and `private_key`, newlines written as `\n` |
 | `GOOGLE_SERVICE_ACCOUNT_JSON` | or the whole key file on one line, instead of those two |

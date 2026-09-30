@@ -50,35 +50,53 @@ jobs:
       # an empty string, and an empty string is not a valid int or bool, so writing
       # SESSION_TTL_MINUTES= would stop the service from starting rather than let it
       # fall back to its default. That is what the first deploy did.
+      # Every value the service reads comes from here. A setting added to
+      # app/core/config.py that a deployment has to set is added here, once: the
+      # names below are the only list, and the script derives what to write from
+      # them. It used to be spelled out twice, in this block and again in the loop,
+      # and the two drifted: VERIFY_BASE_URL was added to one and not the other, so
+      # the secret reached the runner and never reached the container.
+      #
+      # The SETTING_ prefix is what lets the script find them among the runner's own
+      # hundred environment variables. It is stripped before writing.
+      #
+      # Secrets arrive as environment variables rather than being pasted into the
+      # script: a value carrying a quote or a newline cannot break it, and nothing
+      # from a secret is ever interpreted as shell.
+      #
+      # Only values that are set are written. An unset secret arrives as an empty
+      # string, and an empty string is not a valid int or bool, so writing
+      # SESSION_TTL_MINUTES= would stop the service from starting rather than let it
+      # fall back to its default. That is what the first deploy did.
       - name: Create .env from individual secrets
         env:
-          ENVIRONMENT: ${{ secrets.ENVIRONMENT }}
-          ENABLE_DOCS: ${{ secrets.ENABLE_DOCS }}
-          CORS_ORIGINS: ${{ secrets.CORS_ORIGINS }}
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
-          REDIS_URL: ${{ secrets.REDIS_URL }}
-          JWT_SECRET: ${{ secrets.JWT_SECRET }}
-          SESSION_TTL_MINUTES: ${{ secrets.SESSION_TTL_MINUTES }}
-          MAX_SESSION_TTL_MINUTES: ${{ secrets.MAX_SESSION_TTL_MINUTES }}
-          GOOGLE_SERVICE_ACCOUNT_EMAIL: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_EMAIL }}
-          GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY }}
-          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
-          GOOGLE_DRIVE_FOLDER_ID: ${{ secrets.GOOGLE_DRIVE_FOLDER_ID }}
-          GOOGLE_DRIVE_ROOT_FOLDER: ${{ secrets.GOOGLE_DRIVE_ROOT_FOLDER }}
-          EMAIL_ENABLED: ${{ secrets.EMAIL_ENABLED }}
-          DASHBOARD_URL: ${{ secrets.DASHBOARD_URL }}
-          WEB_CONCURRENCY: ${{ secrets.WEB_CONCURRENCY }}
-          RUN_MIGRATIONS: ${{ secrets.RUN_MIGRATIONS }}
-          VERIFY_BASE_URL: ${{ secrets.VERIFY_BASE_URL }}
+          SETTING_ENVIRONMENT: ${{ secrets.ENVIRONMENT }}
+          SETTING_ENABLE_DOCS: ${{ secrets.ENABLE_DOCS }}
+          SETTING_CORS_ORIGINS: ${{ secrets.CORS_ORIGINS }}
+          SETTING_DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          SETTING_REDIS_URL: ${{ secrets.REDIS_URL }}
+          SETTING_JWT_SECRET: ${{ secrets.JWT_SECRET }}
+          SETTING_SESSION_TTL_MINUTES: ${{ secrets.SESSION_TTL_MINUTES }}
+          SETTING_MAX_SESSION_TTL_MINUTES: ${{ secrets.MAX_SESSION_TTL_MINUTES }}
+          SETTING_GOOGLE_SERVICE_ACCOUNT_EMAIL: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_EMAIL }}
+          SETTING_GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY }}
+          SETTING_GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+          SETTING_GOOGLE_DRIVE_FOLDER_ID: ${{ secrets.GOOGLE_DRIVE_FOLDER_ID }}
+          SETTING_GOOGLE_DRIVE_ROOT_FOLDER: ${{ secrets.GOOGLE_DRIVE_ROOT_FOLDER }}
+          SETTING_EMAIL_ENABLED: ${{ secrets.EMAIL_ENABLED }}
+          SETTING_DASHBOARD_URL: ${{ secrets.DASHBOARD_URL }}
+          SETTING_VERIFY_BASE_URL: ${{ secrets.VERIFY_BASE_URL }}
+          SETTING_WEB_CONCURRENCY: ${{ secrets.WEB_CONCURRENCY }}
+          SETTING_RUN_MIGRATIONS: ${{ secrets.RUN_MIGRATIONS }}
         run: |
           set -e
 
-          # Without these three the service is not deployed, it is only running:
-          # no database, or a development JWT secret, or development mode in
-          # production. A deploy that half-works is worse than one that stops here.
+          # Without these three the service is not deployed, it is only running: no
+          # database, or a development JWT secret, or development mode in production.
+          # A deploy that half-works is worse than one that stops here.
           missing=""
           for name in ENVIRONMENT DATABASE_URL JWT_SECRET; do
-            [ -n "$(printenv "$name" || true)" ] || missing="$missing $name"
+            [ -n "$(printenv "SETTING_$name" || true)" ] || missing="$missing $name"
           done
           if [ -n "$missing" ]; then
             echo "these secrets are not set in this repository:$missing"
@@ -86,21 +104,13 @@ jobs:
           fi
 
           : > .env
-          for name in \
-            ENVIRONMENT ENABLE_DOCS CORS_ORIGINS \
-            DATABASE_URL REDIS_URL JWT_SECRET \
-            SESSION_TTL_MINUTES MAX_SESSION_TTL_MINUTES \
-            GOOGLE_SERVICE_ACCOUNT_EMAIL GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY \
-            GOOGLE_SERVICE_ACCOUNT_JSON GOOGLE_DRIVE_FOLDER_ID GOOGLE_DRIVE_ROOT_FOLDER \
-            EMAIL_ENABLED DASHBOARD_URL \
-            WEB_CONCURRENCY RUN_MIGRATIONS
-          do
-            value="$(printenv "$name" || true)"
+          for name in $(printenv | sed -n 's/^SETTING_\([A-Za-z0-9_]*\)=.*/\1/p' | sort -u); do
+            value="$(printenv "SETTING_$name" || true)"
             [ -n "$value" ] || continue
             printf '%s=%s\n' "$name" "$value" >> .env
           done
 
-          # Names only. The values are secrets and the log is readable by anybody
+          # Names only. The values are secrets and this log is readable by anybody
           # who can see the repository.
           echo "wrote $(wc -l < .env) settings:"
           cut -d= -f1 .env | sed 's/^/  /'
