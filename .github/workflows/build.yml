@@ -69,6 +69,7 @@ jobs:
           DASHBOARD_URL: ${{ secrets.DASHBOARD_URL }}
           WEB_CONCURRENCY: ${{ secrets.WEB_CONCURRENCY }}
           RUN_MIGRATIONS: ${{ secrets.RUN_MIGRATIONS }}
+          VERIFY_BASE_URL: ${{secrets.VERIFY_BASE_URL}}
         run: |
           set -e
 

@@ -19,6 +19,9 @@ class Settings(BaseSettings):
     # something a browser attaches on its own.
     CORS_ORIGINS: str = "*"
 
+    # Base URL for session links (e.g. http://localhost:4501). If empty, request base_url is used.
+    VERIFY_BASE_URL: str = ""
+
     # Downloaded once from the OpenCV model zoo; see README.
     FACE_DETECTOR_MODEL: str = "models/face_detection_yunet_2023mar.onnx"
     # MediaPipe's 478-point face mesh bundle, used for liveness (head pose and
