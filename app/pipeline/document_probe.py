@@ -57,18 +57,21 @@ def probe_document_frame(data: bytes, side: str = "front") -> DocumentFrameProbe
     sideways = _looks_sideways(image) if front and not faces else False
 
     hints: list[str] = []
-    if front and lines < rules.LIVE_MIN_TEXT_LINES:
-        hints.append("NO_DOCUMENT_IN_VIEW")
-    if not front:
+    if front:
+        if lines < rules.LIVE_MIN_TEXT_LINES:
+            hints.append("NO_DOCUMENT_IN_VIEW")
+        elif sideways:
+            hints.append("TURN_THE_CARD_UPRIGHT")
+        elif not faces:
+            hints.append("PORTRAIT_NOT_VISIBLE")
+        elif portrait < rules.LIVE_MIN_PORTRAIT_RATIO:
+            hints.append("FIT_THE_CARD_IN_THE_BOX")
+    else:
         # A front-sized portrait on the back step: still showing the front.
         if portrait is not None and portrait >= rules.LIVE_MIN_PORTRAIT_RATIO:
             hints.append("SHOW_THE_BACK")
-    elif sideways:
-        hints.append("TURN_THE_CARD_UPRIGHT")
-    elif not faces:
-        hints.append("PORTRAIT_NOT_VISIBLE")
-    elif portrait < rules.LIVE_MIN_PORTRAIT_RATIO:
-        hints.append("FIT_THE_CARD_IN_THE_BOX")
+        elif lines < 2 and fill < 0.25:
+            hints.append("NO_DOCUMENT_IN_VIEW")
     if brightness < rules.LIVE_MIN_BRIGHTNESS:
         hints.append("TOO_DARK")
     elif brightness > rules.LIVE_MAX_BRIGHTNESS:
