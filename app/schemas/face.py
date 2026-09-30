@@ -96,3 +96,4 @@ class FaceVerificationResponse(BaseModel):
     match: FaceMatchResult
     document: ExtractedFields | None
     processing_ms: int
+    redirect_url: str | None = None
