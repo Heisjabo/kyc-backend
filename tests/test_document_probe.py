@@ -140,6 +140,26 @@ def test_the_back_of_a_card_needs_no_portrait(monkeypatch):
     assert probe_document_frame(back, side="back").usable
 
 
+def test_a_back_needs_no_particular_content(monkeypatch):
+    """No MRZ, barcode or front's worth of text is asked of a back."""
+    monkeypatch.setattr(document_probe, "detect_faces", lambda image: [])
+    sparse = jpeg(card(text_lines=2))
+    assert probe_document_frame(sparse, side="back").usable
+    assert "NO_DOCUMENT_IN_VIEW" not in probe_document_frame(sparse, side="back").hints
+
+
+def test_a_small_ghost_portrait_is_allowed_on_a_back(monkeypatch):
+    image = card()
+    monkeypatch.setattr(document_probe, "detect_faces", lambda frame: with_portrait(image, ratio=0.10))
+    assert probe_document_frame(jpeg(image), side="back").usable
+
+
+def test_a_front_sized_portrait_on_the_back_step_asks_for_the_back(monkeypatch):
+    image = card()
+    monkeypatch.setattr(document_probe, "detect_faces", lambda frame: with_portrait(image, ratio=0.34))
+    assert "SHOW_THE_BACK" in probe_document_frame(jpeg(image), side="back").hints
+
+
 def test_the_endpoint_takes_the_side(monkeypatch):
     monkeypatch.setattr(document_probe, "detect_faces", lambda image: [])
     response = client.post(
