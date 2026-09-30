@@ -29,10 +29,13 @@ from app.schemas.document import DocumentFrameProbe
 def probe_document_frame(data: bytes, side: str = "front") -> DocumentFrameProbe:
     """Judge one cropped camera frame and say what to fix.
 
-    The back of a card carries no photograph, so the portrait checks apply to the
-    front only. Everything else, text, focus, light and glare, is judged the same
-    on both sides: a back that cannot be read is as useless as a front that
-    cannot.
+    The front must show a front's worth of text and its portrait. A back carries
+    no fixed content: some have an MRZ, some a barcode, some a small ghost
+    portrait, some little print at all. So a back is not held to the front's text
+    count or asked for anything in particular. It is judged on focus, light and
+    glare, which are measured the same on both sides, and on one side check: a
+    portrait as large as a front's means the front is still being shown, and the
+    person is asked to turn the card over. A small ghost portrait is fine.
     """
     try:
         image = decode_image(data)
@@ -49,15 +52,17 @@ def probe_document_frame(data: bytes, side: str = "front") -> DocumentFrameProbe
     lines = _text_lines(gray)
 
     front = side != "back"
-    faces = detect_faces(image) if front else []
-    portrait = faces[0].height / image.shape[0] if faces else None
+    faces = detect_faces(image)
+    portrait = max(face.height for face in faces) / image.shape[0] if faces else None
     sideways = _looks_sideways(image) if front and not faces else False
 
     hints: list[str] = []
-    if lines < rules.LIVE_MIN_TEXT_LINES:
+    if front and lines < rules.LIVE_MIN_TEXT_LINES:
         hints.append("NO_DOCUMENT_IN_VIEW")
     if not front:
-        pass                                  # no portrait to look for on a back
+        # A front-sized portrait on the back step: still showing the front.
+        if portrait is not None and portrait >= rules.LIVE_MIN_PORTRAIT_RATIO:
+            hints.append("SHOW_THE_BACK")
     elif sideways:
         hints.append("TURN_THE_CARD_UPRIGHT")
     elif not faces:
