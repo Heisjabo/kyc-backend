@@ -70,15 +70,22 @@ def keep(
     digest = hashlib.sha256(data).hexdigest()
     name = f"{kind}-{digest[:12]}{_EXTENSIONS.get(content_type, '.bin')}"
 
+    # Always keep local copy for lightning-fast reads
+    local_key = _keep_local(verification_id, name, data, kind)
+
     key = None
     if _on_drive():
         try:
             key = drive.upload(verification_id, name, data, content_type)
+            # Also cache by the drive file_id locally so read(key) will find it directly
+            cache_file = Path(settings.EVIDENCE_DIR) / key
+            cache_file.parent.mkdir(parents=True, exist_ok=True)
+            cache_file.write_bytes(data)
         except Exception as err:
             logger.warning("Google Drive upload failed (%s); falling back to local storage", err)
 
     if not key:
-        key = _keep_local(verification_id, name, data, kind)
+        key = local_key
 
     return Stored(storage_key=key, content_type=content_type, byte_size=len(data), sha256=digest)
 
@@ -86,15 +93,27 @@ def keep(
 def read(storage_key: str) -> bytes | None:
     """The bytes back, for the API to serve or the report to embed. None when the
     file is gone, which a retention rule is allowed to do."""
+    # 1. Fast local read: <1ms if cached or kept locally
+    path = Path(settings.EVIDENCE_DIR) / storage_key
+    if path.is_file():
+        return path.read_bytes()
+
+    # 2. Fall back to Google Drive download if not in local cache
     if _on_drive():
         try:
             data = drive.download(storage_key)
             if data is not None:
+                # Save to local cache so next read is instant
+                try:
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_bytes(data)
+                except Exception:
+                    pass
                 return data
-        except Exception:
-            pass
-    path = Path(settings.EVIDENCE_DIR) / storage_key
-    return path.read_bytes() if path.is_file() else None
+        except Exception as err:
+            logger.warning("Failed to fetch evidence %s from Drive: %s", storage_key, err)
+
+    return None
 
 
 def remove(storage_key: str) -> bool:
