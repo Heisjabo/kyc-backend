@@ -85,6 +85,39 @@ def read_access_token(token: str) -> dict | None:
     return claims if claims.get("typ") == "access" else None
 
 
+# Admin console tokens
+#
+# The console (pangolin-admin) gets a token of its own type. A client's dashboard
+# token is never accepted by the console endpoints, and a console token is never
+# accepted by the client ones, because each reader checks `typ`. The role and
+# products travel in the token for the console's convenience only; the endpoints
+# read them again from the account, so a change takes effect at once.
+
+def issue_console_token(account_id: str, email: str, role: str, products: list[str]) -> tuple[str, int]:
+    """A signed token for the admin console, and how many seconds it lasts."""
+    seconds = settings.ACCESS_TOKEN_MINUTES * 60
+    now = datetime.now(UTC)
+    payload = {
+        "sub": str(account_id),
+        "email": email,
+        "role": role,
+        "products": products,
+        "iat": now,
+        "exp": now + timedelta(seconds=seconds),
+        "typ": "console",
+    }
+    return jwt.encode(payload, settings.JWT_SECRET, algorithm="HS256"), seconds
+
+
+def read_console_token(token: str) -> dict | None:
+    """A console token's claims, or None if it is expired, altered or not one."""
+    try:
+        claims = jwt.decode(token, settings.JWT_SECRET, algorithms=["HS256"])
+    except jwt.PyJWTError:
+        return None
+    return claims if claims.get("typ") == "console" else None
+
+
 # API keys
 
 def new_api_key() -> tuple[str, str, str]:
