@@ -22,11 +22,6 @@ unzip -j -o /tmp/buffalo_l.zip 'det_10g.onnx' 'w600k_r50.onnx' -d models/
 # MediaPipe face landmarker (~3.8 MB), the 478-point mesh used for liveness
 curl -sL -o models/face_landmarker.task \
   https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/latest/face_landmarker.task
-
-# AI-generated image detector (~87 MB), Community Forensics ViT-S. Optional: without
-# it the ai_generated check is skipped. Pinned to the author's corrected export.
-curl -sL -o models/ai_image_detector.onnx \
-  https://huggingface.co/buildborderless/CommunityForensics-DeepfakeDet-ViT/resolve/ac6ee457bea904a373065754107451793b56db00/onnx/model.onnx
 ```
 
 Expected SHA-256:
@@ -34,50 +29,7 @@ Expected SHA-256:
 ```
 5838f7fe053675b1c7a08b633df49e7af5495cee0493c7dcf6697200b85b5b91  det_10g.onnx
 4c06341c33c2ca1f86781dab0e829f88ad5b64be9fba56e56bc9ebdefc619e43  w600k_r50.onnx
-a42c7d740fbb345ba9a26d469b22f301d73089ce3c6da993877ed2b6965a8ba1  ai_image_detector.onnx
 ```
-
-### AI-generated image detection
-
-The document step and liveness both run an `ai_generated` check: was this image made
-by a generator? It uses the detector from *Community Forensics: Using Thousands of
-Generators to Train Fake Image Detectors* (Park and Owens, CVPR 2025, MIT), trained on
-images from 4,803 generators.
-
-- **Document:** the front, the back and the portrait on the front are scored, and the
-  highest score counts, since a forger may generate only the face.
-- **Liveness:** the still and two frames through the capture are scored, and the
-  median counts: a deepfake stream is generated in every frame.
-- **Address:** the proof is scored too, and a PDF's pages are scored as the images
-  they were rendered into. A PDF read from its own text layer has no image to score
-  and says so.
-- **Verdict: it never fails a verification.** At `AI_IMAGE_DETECT_THRESHOLD` (0.9)
-  the step passes with the warning `AI_GENERATED_IMAGE` and records the flag; from
-  `AI_IMAGE_SUSPECT_THRESHOLD` (0.5) it warns `AI_GENERATED_SUSPECTED` without
-  setting the flag. Both are settings. The reason is that a detector which refuses
-  people would refuse real ones: it misses some diffusion images and flags
-  photographs run through a generative "enhance" app, which many phones now do by
-  default. So the other checks decide the verdict and this rides along as a flag a
-  person can act on.
-- **Every step records it.** `verification_steps.ai_generated` is true when one of
-  that step's images scored at or above the detect threshold, false when they were
-  scored and none did, and null when the step could not look: no image large enough,
-  or the model not installed. A step can carry several images, a front and a back, a
-  bill and its second page, the frames of a face check. The face step also fills
-  `face_checks.deepfake_checked`, `deepfake_passed` and `deepfake_score`. The score
-  and the per-image scores stay in the step's `result`.
-- Images under 256 pixels on the shorter side are not scored: the detector enlarges
-  everything, and enlargement alone moves the score.
-
-On public test images, real photographs stayed under 0.05 and GAN faces scored 0.99 to
-1.0, through resizing and JPEG compression. It can miss diffusion images, particularly
-once they have been resized or recompressed, and it flags photos run through
-generative "enhance" apps. It is one signal alongside liveness and face match, not a
-guarantee; tune the thresholds on real submissions.
-
-Use the pinned file above. The older export of the same model, which search results
-and the onnx-community mirror point to, was built from the wrong weights with an
-untrained head and scores noise.
 
 ## Run locally
 

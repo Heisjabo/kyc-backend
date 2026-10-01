@@ -108,8 +108,7 @@ jobs:
             exit 1
           fi
 
-      # The face models and the AI-generated image detector: about 290 MB that
-      # never change. Kept on the host and
+      # The face models: about 200 MB that never change. Kept on the host and
       # mounted into the container, so a rebuild does not fetch them again. Only
       # the missing ones are downloaded, and the two large ones are checked against
       # the hashes in the README before anything is asked to load them.
@@ -140,16 +139,6 @@ jobs:
 
           echo "5838f7fe053675b1c7a08b633df49e7af5495cee0493c7dcf6697200b85b5b91  models/det_10g.onnx" | sha256sum -c -
           echo "4c06341c33c2ca1f86781dab0e829f88ad5b64be9fba56e56bc9ebdefc619e43  models/w600k_r50.onnx" | sha256sum -c -
-
-          # The AI-generated image detector (Community Forensics ViT-S). Pinned to
-          # the revision with the author's corrected export: the older export,
-          # mirrored widely, has an untrained head and scores noise.
-          if [ ! -f models/ai_image_detector.onnx ]; then
-            echo "downloading the AI-generated image detector"
-            curl -sL --fail -o models/ai_image_detector.onnx \
-              https://huggingface.co/buildborderless/CommunityForensics-DeepfakeDet-ViT/resolve/ac6ee457bea904a373065754107451793b56db00/onnx/model.onnx
-          fi
-          echo "a42c7d740fbb345ba9a26d469b22f301d73089ce3c6da993877ed2b6965a8ba1  models/ai_image_detector.onnx" | sha256sum -c -
 
       # No remote rewriting and no pull: the checkout above already put this
       # commit in the workspace, and the workspace is wiped and re-fetched on

@@ -24,7 +24,6 @@ from app.engines.face import Face, crop_face, detect_faces, portrait
 from app.engines.image import InvalidImageError, decode_image, to_gray
 from app.engines.mesh import Mesh, face_mesh
 from app.engines.signals import CaptureSignals, read_capture
-from app.pipeline.ai_image import check_ai_generated
 from app.rules import face as rules
 from app.schemas.document import CheckResult, CheckStatus, Decision
 from app.schemas.face import CapturedFace, ChallengeProgress, FramePose, LivenessResponse
@@ -95,8 +94,6 @@ def check_liveness(
             details={"frame_index": still.frame_index if still else None},
         )
     )
-    # 5. Were the frames made by a generator (an injected deepfake stream)?
-    checks.append(check_ai_generated(_ai_frames(images, usable, still), subject="face"))
     return _finish(checks, required, capture, still, frames, len(usable), started, challenge_type)
 
 
@@ -128,19 +125,6 @@ def _finish(checks, required, capture, still, frames, with_face, started, challe
         checks=checks,
         processing_ms=int((time.perf_counter() - started) * 1000),
     )
-
-
-def _ai_frames(images, usable: list[int], still: CapturedFace | None) -> list[tuple[str, np.ndarray]]:
-    """The still, and two frames spread through the capture: three looks at it.
-
-    Whole frames as received, not the portrait crop: the crop is re-encoded, and
-    compression washes out what the detector looks for.
-    """
-    picks = [still.frame_index] if still else []
-    for index in (usable[len(usable) // 3], usable[2 * len(usable) // 3]):
-        if index not in picks:
-            picks.append(index)
-    return [(f"frame_{index}", images[index]) for index in picks[:3] if images[index] is not None]
 
 
 def _unique(items) -> list:
