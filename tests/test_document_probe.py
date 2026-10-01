@@ -160,6 +160,20 @@ def test_a_front_sized_portrait_on_the_back_step_asks_for_the_back(monkeypatch):
     assert "SHOW_THE_BACK" in probe_document_frame(jpeg(image), side="back").hints
 
 
+def test_sideways_face_on_back_step_asks_for_the_back(monkeypatch):
+    calls = {"n": 0}
+
+    def sideways_face(image):
+        calls["n"] += 1
+        # First call is upright (returns empty); subsequent calls are rotated (returns face)
+        return [] if calls["n"] == 1 else with_portrait(image, ratio=0.30)
+
+    monkeypatch.setattr(document_probe, "detect_faces", sideways_face)
+    image = card()
+    answer = probe_document_frame(jpeg(image), side="back")
+    assert "SHOW_THE_BACK" in answer.hints
+
+
 def test_the_endpoint_takes_the_side(monkeypatch):
     monkeypatch.setattr(document_probe, "detect_faces", lambda image: [])
     response = client.post(

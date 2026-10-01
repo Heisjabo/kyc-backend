@@ -66,3 +66,9 @@ LIVE_MIN_TEXT_LINES = 18
 # Consecutive good frames before the capture is taken by itself. One good frame
 # can be luck between two shaky ones.
 LIVE_READY_FRAMES = 3
+
+# Back side analysis
+# A back side should not have a portrait photo. A portrait >= 12% is considered a front-facing portrait.
+LIVE_BACK_MAX_PORTRAIT_RATIO = 0.12
+BACK_SIDE_PORTRAIT_MAX_RATIO = 0.12
+IMAGE_DUPLICATE_SIMILARITY_THRESHOLD = 0.88
