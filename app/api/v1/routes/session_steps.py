@@ -139,6 +139,18 @@ def _keep_file(db: Session, verification: Verification, step: Step, kind: FileKi
     )
 
 
+def _ai_check(liveness) -> bool | None:
+    """Did the face check see a generated frame? None when it could not look."""
+    return service.ai_generated_flag({"checks": [c.model_dump(mode="json") for c in liveness.checks]})
+
+
+def _ai_score(liveness) -> float | None:
+    for check in liveness.checks:
+        if check.name == "ai_generated":
+            return check.details.get("score")
+    return None
+
+
 def _device(request: Request) -> dict:
     """What can be seen about the device from the request itself.
 
@@ -501,6 +513,13 @@ def submit_face(
             matched=match.check.status.value == "pass",
             duplicate_of_verification_id=duplicate,
             duplicate_score=duplicate_score,
+            # The generator check, in the columns built for it. checked is false
+            # when it could not look: no frame large enough, or no model installed.
+            # passed is the inverse of detected, so the report reads the way the rest
+            # of this table does.
+            deepfake_checked=_ai_check(liveness) is not None,
+            deepfake_passed=(None if _ai_check(liveness) is None else not _ai_check(liveness)),
+            deepfake_score=_ai_score(liveness),
             result={"liveness": liveness.model_dump(mode="json", exclude={"capture"}),
                     "match": match.model_dump(mode="json")},
         )

@@ -43,8 +43,11 @@ class Settings(BaseSettings):
     # and a face passes with a warning. On public test images real photographs
     # stayed under 0.05 and generated faces scored 0.97 to 1.0, so both lines sit
     # well clear of either; tune them once real submissions have been scored.
-    AI_IMAGE_REVIEW_THRESHOLD: float = 0.5
-    AI_IMAGE_REJECT_THRESHOLD: float = 0.9
+    # Where a score becomes a warning. Neither one fails a verification: the
+    # detector misses some diffusion images and flags photographs that went through
+    # a generative "enhance" app, so it flags rather than refuses.
+    AI_IMAGE_SUSPECT_THRESHOLD: float = 0.5
+    AI_IMAGE_DETECT_THRESHOLD: float = 0.9
 
     # How long a verification link works for, in minutes. Shufti's default is
     # 60 and a client can override it per request with ttl.

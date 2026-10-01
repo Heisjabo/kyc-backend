@@ -48,10 +48,24 @@ images from 4,803 generators.
   highest score counts, since a forger may generate only the face.
 - **Liveness:** the still and two frames through the capture are scored, and the
   median counts: a deepfake stream is generated in every frame.
-- **Verdict:** at `AI_IMAGE_REJECT_THRESHOLD` (0.9) the step fails with
-  `AI_GENERATED_DOCUMENT` or `AI_GENERATED_FACE`. From `AI_IMAGE_REVIEW_THRESHOLD`
-  (0.5) a document goes to review and a face passes with the warning
-  `AI_GENERATED_SUSPECTED`. Both are settings.
+- **Address:** the proof is scored too, and a PDF's pages are scored as the images
+  they were rendered into. A PDF read from its own text layer has no image to score
+  and says so.
+- **Verdict: it never fails a verification.** At `AI_IMAGE_DETECT_THRESHOLD` (0.9)
+  the step passes with the warning `AI_GENERATED_IMAGE` and records the flag; from
+  `AI_IMAGE_SUSPECT_THRESHOLD` (0.5) it warns `AI_GENERATED_SUSPECTED` without
+  setting the flag. Both are settings. The reason is that a detector which refuses
+  people would refuse real ones: it misses some diffusion images and flags
+  photographs run through a generative "enhance" app, which many phones now do by
+  default. So the other checks decide the verdict and this rides along as a flag a
+  person can act on.
+- **Every step records it.** `verification_steps.ai_generated` is true when one of
+  that step's images scored at or above the detect threshold, false when they were
+  scored and none did, and null when the step could not look: no image large enough,
+  or the model not installed. A step can carry several images, a front and a back, a
+  bill and its second page, the frames of a face check. The face step also fills
+  `face_checks.deepfake_checked`, `deepfake_passed` and `deepfake_score`. The score
+  and the per-image scores stay in the step's `result`.
 - Images under 256 pixels on the shorter side are not scored: the detector enlarges
   everything, and enlargement alone moves the score.
 

@@ -73,16 +73,26 @@ def test_real_document_passes(scores):
 def test_document_takes_the_highest_score_so_one_generated_side_is_enough(scores):
     scores["values"] = [0.02, 0.97]
     result = check_ai_generated([("front", image()), ("portrait", image(seed=1))], subject="document")
-    assert result.status == "fail"
-    assert result.reasons == ["AI_GENERATED_DOCUMENT"]
     assert result.details["score"] == 0.97 and result.details["combined"] == "max"
+    assert result.warnings == ["AI_GENERATED_IMAGE"]
 
 
-def test_middling_document_goes_to_review(scores):
+def test_it_never_fails_a_step_whatever_the_score(scores):
+    """A detector that refuses people would refuse real ones: it misses some
+    diffusion images and flags photographs put through a generative "enhance" app.
+    So it warns, the other checks decide, and a person sees the flag."""
+    for value in (0.0, 0.6, 0.95, 1.0):
+        scores["values"] = [value]
+        result = check_ai_generated([("front", image())], subject="document")
+        assert result.status == "pass", value
+        assert result.reasons == [], value
+
+
+def test_a_middling_document_warns_more_softly(scores):
     scores["values"] = [0.6]
     result = check_ai_generated([("front", image())], subject="document")
-    assert result.status == "review"
-    assert result.reasons == ["AI_GENERATED_SUSPECTED"]
+    assert result.status == "pass"
+    assert result.warnings == ["AI_GENERATED_SUSPECTED"]
 
 
 def test_face_takes_the_median_so_one_odd_frame_is_not_a_verdict(scores):
@@ -92,11 +102,11 @@ def test_face_takes_the_median_so_one_odd_frame_is_not_a_verdict(scores):
     assert result.details["combined"] == "median" and result.details["score"] == 0.02
 
 
-def test_generated_face_fails(scores):
+def test_a_generated_face_warns_and_does_not_fail(scores):
     scores["values"] = [0.98, 0.99, 0.95]
     result = check_ai_generated([("frame_0", image()), ("frame_1", image(seed=1)), ("frame_2", image(seed=2))], subject="face")
-    assert result.status == "fail"
-    assert result.reasons == ["AI_GENERATED_FACE"]
+    assert result.status == "pass"
+    assert result.warnings == ["AI_GENERATED_IMAGE"]
 
 
 def test_middling_face_passes_with_a_warning(scores):
@@ -107,9 +117,34 @@ def test_middling_face_passes_with_a_warning(scores):
 
 
 def test_thresholds_are_settings(scores, monkeypatch):
-    monkeypatch.setattr(settings, "AI_IMAGE_REJECT_THRESHOLD", 0.99)
+    monkeypatch.setattr(settings, "AI_IMAGE_DETECT_THRESHOLD", 0.99)
     scores["values"] = [0.95]
-    assert check_ai_generated([("front", image())], subject="document").status == "review"
+    result = check_ai_generated([("front", image())], subject="document")
+    assert result.warnings == ["AI_GENERATED_SUSPECTED"]
+
+
+# What a step records
+
+
+def test_the_flag_a_step_stores(scores):
+    """verification_steps.ai_generated: true, false, or null when it could not look."""
+    from app.services.verifications import ai_generated_flag
+
+    def flag(check):
+        return ai_generated_flag({"checks": [check.model_dump(mode="json")]})
+
+    scores["values"] = [0.99]
+    assert flag(check_ai_generated([("front", image())], subject="document")) is True
+
+    scores["values"] = [0.01]
+    assert flag(check_ai_generated([("front", image())], subject="document")) is False
+
+    scores["values"] = [0.6]
+    assert flag(check_ai_generated([("front", image())], subject="document")) is False
+
+    # Too small to score: the step could not look, so it says nothing either way.
+    assert flag(check_ai_generated([("portrait", image(MIN_SIDE - 1))], subject="document")) is None
+    assert ai_generated_flag({"checks": []}) is None
 
 
 # Which images the steps hand over
@@ -123,7 +158,9 @@ def test_liveness_scores_the_still_and_two_frames_through_the_capture():
 
 
 @needs_font
-def test_a_generated_document_fails_the_document_step(scores):
+def test_a_generated_document_still_passes_the_document_step_but_is_flagged(scores):
+    """Everything else about this document is in order, so it passes, and the
+    generated image is a warning for a person to act on."""
     scores["values"] = [0.99, 0.99]
     result = scan_document(
         DocumentType.passport,
@@ -131,8 +168,9 @@ def test_a_generated_document_fails_the_document_step(scores):
         applicant=Applicant(first_name="Jean", last_name="Mugisha", date_of_birth=date(1995, 3, 15), issuing_country="RWA"),
         today=TODAY,
     )
-    assert result.decision == "fail"
-    assert "AI_GENERATED_DOCUMENT" in result.reasons
+    assert result.decision == "pass"
+    assert "AI_GENERATED_IMAGE" in result.warnings
+    assert "AI_GENERATED_IMAGE" not in result.reasons
 
 
 # The engine
