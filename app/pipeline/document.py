@@ -13,13 +13,17 @@ import unicodedata
 from dataclasses import asdict
 from datetime import date
 
+import cv2
+import numpy as np
 from rapidfuzz import fuzz
 
+from app.engines.face import detect_faces
 from app.engines.fields import VisualFields, extract_visual_fields, to_alpha3
 from app.engines.image import InvalidImageError, decode_image
 from app.engines.mrz import MrzResult, parse_mrz_text, read_mrz
 from app.engines.ocr import read_document
 from app.engines.quality import assess_quality
+from app.pipeline.document_probe import _looks_sideways
 from app.rules import document as rules
 from app.schemas.document import (
     Applicant,
@@ -131,6 +135,18 @@ def scan_document(
             checks.append(consistency)
 
     # 6. The document itself, then 7. does it belong to the applicant.
+    if back is not None:
+        back_check = _back_side_check(
+            document_type=document_type,
+            front_data=front,
+            back_data=back,
+            images=images,
+            ocr_lines=ocr_lines,
+            applicant=applicant,
+        )
+        if back_check is not None:
+            checks.append(back_check)
+
     checks.append(_document_type_check(document_type, extracted if use_mrz else None, visual))
     checks.append(_validity_check(extracted, today, require_adult, document_type))
     if applicant.issuing_country:
@@ -156,7 +172,7 @@ def _unique(items) -> list[str]:
 
 
 def _decide(checks: list[CheckResult]) -> Decision:
-    if any(c.name == "document_detection" and c.status == CheckStatus.failed for c in checks):
+    if any(c.name in ("document_detection", "back_side") and c.status == CheckStatus.failed for c in checks):
         return Decision.retake
     if any(c.status == CheckStatus.failed for c in checks):
         return Decision.failed
@@ -188,10 +204,13 @@ def _find_mrz(document_type: DocumentType, images: dict, ocr_lines: dict) -> Mrz
     mrz_seen = any("<<" in line for side in sides for line in ocr_lines[side])
     if document_type == DocumentType.passport or mrz_seen:
         for side in sides:
-            result = read_mrz(images[side])
-            if result and result.valid:
-                return result
-            best = best or result
+            try:
+                result = read_mrz(images[side])
+                if result and result.valid:
+                    return result
+                best = best or result
+            except Exception:
+                pass
     return best
 
 
@@ -456,4 +475,123 @@ def _dob_check(expected: date, extracted: ExtractedFields, visual: VisualFields,
         status=status,
         reasons=reasons,
         details={"provided": expected, "document": extracted.date_of_birth},
+    )
+
+
+_BACK_KEYWORDS = [
+    "PLACE OF ISSUE", "AUTHORITY", "DATE OF ISSUE", "EXPIRY", "SIGNATURE",
+    "CONDITIONS", "RESTRICTIONS", "CATEGORIES", "VEHICLE", "BLOOD GROUP",
+    "ORGAN DONOR", "EMERGENCY CONTACT", "POSTAL ADDRESS", "RESIDENCE",
+    "ISSUED BY", "PROPERTY OF", "FOUND PLEASE RETURN", "DISCLAIMER", "CHIP",
+    "LIEU DE DELIVRANCE", "AUTORITE", "DATE DE DELIVRANCE", "DATE D'EXPIRATION",
+    "EMPREINTE", "DOMICILE", "ADRESSE", "CATEGORIE",
+    "AHO YATANGIWE", "UMUKONO", "ICYEMEZO", "URWEGO RWABITANZE",
+    "ITARIKI YATANGIWEYEHO", "IRANGIRIRAHO", "AKAGARI", "UMURENGE", "AKARERE", "INTARA",
+    "MAHALI PA KUTOLEWA", "SAHIHI", "MAMLAKA", "TAREHE YA KUTOLEWA",
+]
+
+
+def _has_back_keywords(lines: list[str]) -> bool:
+    text = " ".join(lines).upper()
+    return any(kw in text for kw in _BACK_KEYWORDS)
+
+
+def _image_similarity(img1: np.ndarray, img2: np.ndarray) -> float:
+    try:
+        g1 = cv2.cvtColor(img1, cv2.COLOR_BGR2GRAY) if len(img1.shape) == 3 else img1
+        g2 = cv2.cvtColor(img2, cv2.COLOR_BGR2GRAY) if len(img2.shape) == 3 else img2
+        s1 = cv2.resize(g1, (128, 128))
+        s2 = cv2.resize(g2, (128, 128))
+        res = cv2.matchTemplate(s1, s2, cv2.TM_CCOEFF_NORMED)[0][0]
+        return max(0.0, float(res))
+    except Exception:
+        return 0.0
+
+
+def _back_side_check(
+    document_type: DocumentType,
+    front_data: bytes,
+    back_data: bytes | None,
+    images: dict[str, np.ndarray],
+    ocr_lines: dict[str, list[str]],
+    applicant: Applicant,
+) -> CheckResult | None:
+    if back_data is None or "back" not in images:
+        return None
+
+    # 1. Exact or near-duplicate image check
+    if front_data == back_data:
+        return CheckResult(
+            name="back_side",
+            status=CheckStatus.failed,
+            reasons=["FRONT_AND_BACK_IDENTICAL", "BACK_SIDE_IS_FRONT"],
+            details={"issue": "identical_bytes"},
+        )
+
+    front_img = images.get("front")
+    back_img = images.get("back")
+    if front_img is not None and back_img is not None:
+        sim = _image_similarity(front_img, back_img)
+        threshold = getattr(rules, "IMAGE_DUPLICATE_SIMILARITY_THRESHOLD", 0.88)
+        if sim >= threshold:
+            return CheckResult(
+                name="back_side",
+                status=CheckStatus.failed,
+                reasons=["FRONT_AND_BACK_IDENTICAL", "BACK_SIDE_IS_FRONT"],
+                details={"similarity": round(sim, 3), "issue": "duplicate_image"},
+            )
+
+    # 2. Portrait photo check (ID cards and driving licences carry the photo on the front)
+    if document_type in (DocumentType.id_card, DocumentType.driving_license) and back_img is not None:
+        back_faces = detect_faces(back_img)
+        back_portrait = max(face.height for face in back_faces) / back_img.shape[0] if back_faces else None
+        back_sideways = _looks_sideways(back_img) if not back_faces else False
+
+        max_back_ratio = getattr(rules, "BACK_SIDE_PORTRAIT_MAX_RATIO", 0.12)
+        if (back_portrait is not None and back_portrait >= max_back_ratio) or back_sideways:
+            return CheckResult(
+                name="back_side",
+                status=CheckStatus.failed,
+                reasons=["PORTRAIT_ON_BACK_SIDE", "BACK_SIDE_IS_FRONT"],
+                details={
+                    "portrait_ratio": round(back_portrait, 3) if back_portrait is not None else None,
+                    "sideways": back_sideways,
+                    "issue": "portrait_on_back",
+                },
+            )
+
+    # 3. OCR Text analysis
+    front_text_lines = ocr_lines.get("front", [])
+    back_text_lines = ocr_lines.get("back", [])
+    has_mrz_back = any("<<" in line for line in back_text_lines)
+
+    if not has_mrz_back and document_type in (DocumentType.id_card, DocumentType.driving_license):
+        front_words = set(_normalize_name(" ".join(front_text_lines)))
+        back_words = set(_normalize_name(" ".join(back_text_lines)))
+        has_back_kw = _has_back_keywords(back_text_lines)
+
+        applicant_names = _normalize_name(applicant.first_name) + _normalize_name(applicant.last_name)
+        applicant_name_on_back = any(name in back_words for name in applicant_names) if applicant_names else False
+
+        visual_back = extract_visual_fields(back_text_lines, date.today())
+        front_doc_types = visual_back.document_types
+
+        overlap = len(front_words & back_words) / max(len(back_words), 1) if back_words else 0
+        if (overlap >= 0.60 and not has_back_kw) or (front_doc_types and applicant_name_on_back and not has_back_kw):
+            return CheckResult(
+                name="back_side",
+                status=CheckStatus.failed,
+                reasons=["BACK_SIDE_IS_FRONT"],
+                details={
+                    "overlap": round(overlap, 2),
+                    "applicant_name_on_back": applicant_name_on_back,
+                    "issue": "front_text_on_back",
+                },
+            )
+
+    return CheckResult(
+        name="back_side",
+        status=CheckStatus.passed,
+        reasons=[],
+        details={"has_mrz": has_mrz_back, "text_lines": len(back_text_lines)},
     )

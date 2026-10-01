@@ -54,7 +54,7 @@ def probe_document_frame(data: bytes, side: str = "front") -> DocumentFrameProbe
     front = side != "back"
     faces = detect_faces(image)
     portrait = max(face.height for face in faces) / image.shape[0] if faces else None
-    sideways = _looks_sideways(image) if front and not faces else False
+    sideways = _looks_sideways(image) if not faces else False
 
     hints: list[str] = []
     if front:
@@ -67,8 +67,9 @@ def probe_document_frame(data: bytes, side: str = "front") -> DocumentFrameProbe
         elif portrait < rules.LIVE_MIN_PORTRAIT_RATIO:
             hints.append("FIT_THE_CARD_IN_THE_BOX")
     else:
-        # A front-sized portrait on the back step: still showing the front.
-        if portrait is not None and portrait >= rules.LIVE_MIN_PORTRAIT_RATIO:
+        # A front-sized portrait on the back step: still showing the front (upright or rotated).
+        max_back_ratio = getattr(rules, "LIVE_BACK_MAX_PORTRAIT_RATIO", 0.12)
+        if (portrait is not None and portrait >= max_back_ratio) or sideways:
             hints.append("SHOW_THE_BACK")
         elif lines < 2 and fill < 0.25:
             hints.append("NO_DOCUMENT_IN_VIEW")
@@ -146,14 +147,12 @@ def _card_fill(gray: np.ndarray) -> float:
 
 
 def _looks_sideways(image: np.ndarray) -> bool:
-    """Is there a face that would be found if the card were turned upright?
+    """Is there a face that would be found if the card were turned?
 
-    Detectors are trained on upright faces, so a card lying sideways reads as
-    having no portrait at all. Rather than tell the person their document has no
-    photograph, which is confusing and wrong, we check the two quarter turns and
-    tell them to turn it.
+    Detectors are trained on upright faces, so a card lying sideways or upside-down
+    reads as having no portrait at all. We check quarter turns and 180 degrees.
     """
-    for rotation in (cv2.ROTATE_90_CLOCKWISE, cv2.ROTATE_90_COUNTERCLOCKWISE):
+    for rotation in (cv2.ROTATE_90_CLOCKWISE, cv2.ROTATE_90_COUNTERCLOCKWISE, cv2.ROTATE_180):
         if detect_faces(cv2.rotate(image, rotation)):
             return True
     return False

@@ -231,6 +231,63 @@ def test_someone_elses_id_fails():
     assert {"NAME_MISMATCH", "DOB_MISMATCH"} <= set(result.reasons)
 
 
+def rwa_id_back():
+    rows = [
+        ("Aho Yatangiwe / Place of Issue", "Gasabo"),
+        ("Itariki Yatangiweho / Date of Issue", "15/04/2015"),
+        ("Urwego Rwabitanze / Issuing Authority", "NIDA"),
+    ]
+    return to_bytes(render_card("REPUBULIKA Y'U RWANDA", "", rows))
+
+
+@needs_font
+def test_back_side_identical_to_front_fails():
+    front = rwa_id_front()
+    result = scan_document(
+        DocumentType.id_card,
+        front,
+        back=front,
+        applicant=Applicant(first_name="Jean", last_name="Mugisha", date_of_birth=date(1995, 3, 15), issuing_country="RWA"),
+        today=TODAY,
+    )
+    assert result.decision == "retake"
+    assert "FRONT_AND_BACK_IDENTICAL" in result.reasons
+    assert "BACK_SIDE_IS_FRONT" in result.reasons
+
+
+@needs_font
+def test_back_side_with_portrait_fails(monkeypatch):
+    import app.pipeline.document as doc_mod
+    from app.engines.face import Face, Landmarks
+
+    marks = Landmarks(right_eye=(0, 0), left_eye=(0, 0), nose=(0, 0), right_mouth=(0, 0), left_mouth=(0, 0))
+    fake_face = [Face(x=20, y=20, width=150, height=150, score=0.95, landmarks=marks)]
+    monkeypatch.setattr(doc_mod, "detect_faces", lambda img: fake_face)
+
+    result = scan_document(
+        DocumentType.id_card,
+        rwa_id_front(),
+        back=rwa_id_back(),
+        applicant=Applicant(first_name="Jean", last_name="Mugisha", date_of_birth=date(1995, 3, 15), issuing_country="RWA"),
+        today=TODAY,
+    )
+    assert result.decision == "retake"
+    assert "PORTRAIT_ON_BACK_SIDE" in result.reasons
+    assert "BACK_SIDE_IS_FRONT" in result.reasons
+
+
+@needs_font
+def test_valid_back_side_passes():
+    result = scan_document(
+        DocumentType.id_card,
+        rwa_id_front(),
+        back=rwa_id_back(),
+        applicant=Applicant(first_name="Jean", last_name="Mugisha", date_of_birth=date(1995, 3, 15), issuing_country="RWA"),
+        today=TODAY,
+    )
+    assert result.decision == "pass", result.reasons
+
+
 def test_qr_code_is_not_a_document():
     qr = to_bytes(render_qr_like())
     result = scan_document(DocumentType.id_card, qr, back=qr, today=TODAY)
