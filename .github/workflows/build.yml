@@ -148,6 +148,7 @@ jobs:
         run: |
           set -e
           mkdir -p var/evidence
+          chmod -R 777 var/evidence
           docker compose up --build -d
           # Dangling images only. A full `docker system prune -af` would throw away
           # the build cache, and this image installs TensorFlow and compiles
