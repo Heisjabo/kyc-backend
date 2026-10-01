@@ -19,7 +19,6 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.engines.fields import to_alpha3
-from app.pipeline.ai_image import AI_GENERATED
 from app.db.models import (
     Applicant,
     Step,
@@ -271,22 +270,6 @@ def open_step(db: Session, verification: Verification, step: VerificationStep) -
     return current
 
 
-def ai_generated_flag(result: dict | None) -> bool | None:
-    """Did this step see a generated image? Read back out of its own checks.
-
-    True when one scored at or above the detect threshold, false when they were
-    scored and none did, null when the step could not look: no image large enough,
-    or the detector not installed.
-    """
-    for check in (result or {}).get("checks", []):
-        if check.get("name") != "ai_generated":
-            continue
-        if check.get("status") == "skipped":
-            return None
-        return AI_GENERATED in (check.get("warnings") or [])
-    return None
-
-
 def finish_step(
     db: Session,
     step: Step,
@@ -302,9 +285,6 @@ def finish_step(
     step.warnings = warnings or []
     step.result = result or {}
     step.extracted = extracted or {}
-    # Taken from the step's own checks rather than passed in by each route, so a
-    # step added later cannot forget to record it.
-    step.ai_generated = ai_generated_flag(step.result)
     step.completed_at = datetime.now(UTC)
     db.flush()
     return step

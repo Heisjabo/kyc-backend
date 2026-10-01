@@ -32,7 +32,6 @@ from app.engines.image import InvalidImageError, decode_image
 from app.engines.ocr import read_document
 from app.engines.pdf import is_pdf, render_pages, text_lines
 from app.engines.quality import assess_quality
-from app.pipeline.ai_image import check_ai_generated
 from app.pipeline.document import names_on_document
 from app.rules import address as rules
 from app.schemas.address import AddressCheckResponse, AddressExtracted, ProofType
@@ -81,7 +80,7 @@ def scan_address_proof(
         return finish()
 
     try:
-        lines, qualities, sides, pictures = _read_proof(front, back)
+        lines, qualities, sides = _read_proof(front, back)
     except UnreadableProof as unreadable:
         checks.append(
             CheckResult(
@@ -116,11 +115,6 @@ def scan_address_proof(
     if not readable:
         return finish()
 
-    # Was the proof itself generated? A bill is text on a plain background, which
-    # is the easiest thing in this flow to produce with a generator. A PDF's pages
-    # are scored as the images they were rendered into; a PDF read from its own text
-    # layer has no image to score and says so.
-    checks.append(check_ai_generated(pictures, subject="address"))
     checks.append(_type_check(proof_type, lines))
     checks.append(_address_check(claimed_address, lines, extracted))
     checks.append(_owner_check(names or [], lines))
@@ -143,9 +137,8 @@ class UnreadableProof(Exception):
         self.reason = reason
 
 
-def _read_proof(front: bytes, back: bytes | None) -> tuple[list[str], dict, list[str], list[tuple[str, object]]]:
-    """The text on the proof, the quality of each photograph, what was read, and the
-    pictures themselves.
+def _read_proof(front: bytes, back: bytes | None) -> tuple[list[str], dict, list[str]]:
+    """The text on the proof, the quality of each photograph, and what was read.
 
     A PDF is read from its own text layer when it has one, which a bank's own
     statement does, and rendered and OCRed when it does not, which a scan does not.
@@ -156,9 +149,6 @@ def _read_proof(front: bytes, back: bytes | None) -> tuple[list[str], dict, list
     lines: list[str] = []
     qualities: dict = {}
     read: list[str] = []
-    # Every picture this proof turned out to be, for the generator check. A PDF read
-    # from its own text layer contributes none: there is no image to score.
-    pictures: list[tuple[str, object]] = []
 
     for side, data in (("front", front), ("back", back)):
         if data is None:
@@ -174,9 +164,8 @@ def _read_proof(front: bytes, back: bytes | None) -> tuple[list[str], dict, list
             pages = render_pages(data)
             if not pages:
                 raise UnreadableProof("PROOF_NOT_READABLE")
-            for number, page in enumerate(pages, start=1):
+            for page in pages:
                 lines.extend(line.text for line in read_document(page))
-                pictures.append((f"{side} page {number}", page))
             read.append(f"{side}: pdf rendered, {len(pages)} page(s)")
             continue
 
@@ -185,11 +174,10 @@ def _read_proof(front: bytes, back: bytes | None) -> tuple[list[str], dict, list
         except InvalidImageError:
             raise UnreadableProof("IMAGE_UNREADABLE") from None
         qualities[side] = assess_quality(image)
-        pictures.append((side, image))
         lines.extend(line.text for line in read_document(image))
         read.append(f"{side}: photograph")
 
-    return lines, qualities, read, pictures
+    return lines, qualities, read
 
 
 def _decide(checks: list[CheckResult]) -> Decision:
