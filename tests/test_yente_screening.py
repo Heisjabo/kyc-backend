@@ -18,14 +18,14 @@ def test_outcomes(monkeypatch, score, outcome):
     assert Identity(full_name='  Alex   Demo  ').full_name == 'Alex Demo'
 
 @pytest.mark.parametrize('payload', [None, {}, {'responses': {'identity': {'status': 200, 'results': [], 'total': {'value': 1, 'relation': 'eq'}}}}])
-def test_failure_never_clears(monkeypatch, payload):
+def test_failure_records_unavailable_warning_policy(monkeypatch, payload):
     def handle(request):
         return httpx.Response(503 if payload is None else 200, json=payload)
     original = httpx.Client
     monkeypatch.setattr(httpx, 'Client', lambda **kwargs: original(transport=httpx.MockTransport(handle)))
     result = screen(Identity(full_name='Alex Demo'))
     assert result.outcome == 'unavailable'
-    assert result.action == 'manual_review'
+    assert result.action == 'allow_with_warning'
 
 def test_face_gate(monkeypatch):
     from types import SimpleNamespace
@@ -40,7 +40,7 @@ def test_face_gate(monkeypatch):
 from tests.test_sessions import db_session, client, api_key, open_verification
 
 @pytest.mark.parametrize('outcome,expected', [('no_match', 'passed'), ('possible_match', 'needs_review'),
-    ('strong_match', 'needs_review'), ('unavailable', 'needs_review')])
+    ('strong_match', 'needs_review'), ('unavailable', 'passed')])
 def test_persisted_flow(client, api_key, db_session, monkeypatch, outcome, expected):
     from sqlalchemy import select
     from app.db.models import Verification, VerificationStep, StepStatus
@@ -107,7 +107,7 @@ def test_aml_is_added_to_existing_document_face_requests(client, api_key):
     assert default.json()['services'] == ['document', 'face', 'aml']
 
 
-@pytest.mark.parametrize('outcome,expected', [('no_match', 'passed'), ('strong_match', 'needs_review'), ('unavailable', 'needs_review')])
+@pytest.mark.parametrize('outcome,expected', [('no_match', 'passed'), ('strong_match', 'needs_review'), ('unavailable', 'passed')])
 def test_face_submission_automatically_finishes_aml(client, api_key, db_session, monkeypatch, outcome, expected):
     import numpy as np
     from sqlalchemy import select
@@ -148,11 +148,15 @@ def test_face_submission_automatically_finishes_aml(client, api_key, db_session,
     report = client.get(f"/v1/verifications/{opened['reference']}",headers=api_key).json()
     assert report['status'] == expected
     assert report['aml']['outcome'] == outcome
+    if outcome == 'unavailable':
+        assert report['aml']['action'] == 'allow_with_warning'
+        assert 'AML_UNAVAILABLE' in report['warnings']
+        assert report['reasons'] == []
     session = client.get(f'/v1/sessions/{token}').json()
     assert session['next_step'] is None
     verification = db_session.scalar(select(Verification).where(Verification.reference==opened['reference']))
     aml = next(step for step in verification.steps if step.step==VerificationStep.aml)
-    assert aml.status == (StepStatus.passed if outcome=='no_match' else StepStatus.review)
+    assert aml.status == (StepStatus.passed if outcome in ('no_match', 'unavailable') else StepStatus.review)
     # The verified identity is frozen once the final result has been recorded.
     assert client.post(f'/v1/sessions/{token}/document', data={'document_type':'id_card'},
                        files={'front':('id.jpg',image_bytes(),'image/jpeg')}).status_code == 409
@@ -187,3 +191,26 @@ def test_dotenv_settings_are_used_for_private_service(monkeypatch):
     original=httpx.Client
     monkeypatch.setattr(httpx,'Client',lambda **kwargs:original(transport=httpx.MockTransport(handle),**kwargs))
     assert screen(Identity(full_name='Example Person')).outcome=='no_match'
+
+
+@pytest.mark.parametrize('fields', [{}, {'full_name': 'Verified Person', 'nationality': 'invalid-country'}])
+def test_invalid_identity_proceeds_with_warning(client, api_key, db_session, monkeypatch, fields):
+    from sqlalchemy import select
+    from app.db.models import Verification, VerificationStep, StepStatus
+    from app.services.verifications import settle
+    opened = open_verification(client, api_key)
+    verification = db_session.scalar(select(Verification).where(Verification.reference == opened['reference']))
+    for step in verification.steps:
+        if step.step != VerificationStep.aml:
+            step.status = StepStatus.passed
+        if step.step == VerificationStep.document:
+            step.extracted = fields
+    monkeypatch.setattr('app.screening.yente.screen', lambda identity: pytest.fail('Invalid identity must not be sent'))
+    settle(db_session, verification)
+    assert verification.status.value == 'passed'
+    assert verification.event == 'verification.accepted'
+    assert verification.warnings == ['AML_UNAVAILABLE']
+    aml = next(step for step in verification.steps if step.step == VerificationStep.aml)
+    assert aml.result['outcome'] == 'unavailable'
+    assert aml.result['action'] == 'allow_with_warning'
+    assert aml.result['error'] == 'Missing or invalid extracted identity'

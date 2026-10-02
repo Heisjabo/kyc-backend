@@ -22,7 +22,8 @@ Document-only journeys, including child birth-certificate checks, remain separat
 AML uses the document's extracted full name (or given names plus surname), date
 of birth, nationality and document number where available. It does not screen
 unverified applicant fields or a name supplied by the browser. Missing or invalid
-extracted identity produces a review result.
+extracted identity allows onboarding with an `AML_UNAVAILABLE` warning; screening
+remains recorded as `unavailable`, not as a successful no-match.
 
 ## What the frontend must read
 
@@ -47,12 +48,13 @@ verification if the identity needs to be checked again.
 | `no_match` | `clear` | `passed` |
 | `possible_match` | `manual_review` | `needs_review` |
 | `strong_match` | `block_escalate` | `needs_review` |
-| `unavailable` | `manual_review` | `needs_review` |
+| `unavailable` | `allow_with_warning` | `passed` with `AML_UNAVAILABLE` warning |
 
 Strong matches should hold onboarding and go to compliance review. They are not
 automatically an assertion of wrongdoing. API failure, timeout, missing identity
-or an incomplete matcher response never clears a verification. There is no
-automatic outage retry: the stored review result remains for review; a new
+or an incomplete matcher response allows onboarding with the warning above.
+This policy can accept people whose AML screening could not be completed. There is no
+automatic outage retry: the unavailable result is retained; a new
 verification can repeat the checks. Repeated reads of the stored result do not
 make another AML request.
 
