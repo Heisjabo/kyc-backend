@@ -106,6 +106,21 @@ class ConsoleDocument(BaseModel):
     expiry_date: date | None
 
 
+class ConsoleFile(BaseModel):
+    """One piece of evidence captured during a verification. Fetch its bytes from
+    /v1/console/verifications/{id}/files/{file id}, and a still from a video
+    from the same path with /thumbnail."""
+
+    id: str
+    kind: str
+    step: str | None
+    attempt: int | None
+    content_type: str
+    byte_size: int
+    captured_at: datetime | None
+    created_at: datetime
+
+
 class ConsoleVerificationDetail(ConsoleVerificationSummary):
     language: str | None
     warnings: list[str]
@@ -113,3 +128,5 @@ class ConsoleVerificationDetail(ConsoleVerificationSummary):
     steps: list[ConsoleStep]
     document: ConsoleDocument | None
     files: list[str]
+    # Every file captured, oldest first, retakes included.
+    evidence: list[ConsoleFile]
