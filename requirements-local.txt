@@ -1,0 +1,52 @@
+fastapi==0.115.*
+uvicorn[standard]==0.32.*
+pydantic-settings==2.*
+python-multipart==0.0.*
+
+# Database
+sqlalchemy==2.*
+alembic==1.*
+psycopg[binary]==3.*
+
+# Accounts and API keys. Argon2id for passwords (the OWASP recommendation),
+# PyJWT for dashboard sessions.
+# Proof of address as a PDF, which is the only form most bank statements come in.
+# pypdfium2 is BSD/Apache and ships its own binary; PyMuPDF would be AGPL.
+pypdfium2==5.*
+
+# The QR on the session page, drawn here rather than by a third party: the session
+# token is the whole credential, and it is not going in somebody else's query
+# string. Pure Python, no dependencies of its own.
+segno==1.6.*
+
+# Evidence on Google Drive: a service account uploads and reads it back, and
+# nothing is ever shared from there. See app/storage/drive.py.
+google-api-python-client==2.*
+google-auth==2.*
+
+argon2-cffi==25.*
+pyjwt==2.*
+# EmailStr validation in the auth schemas.
+email-validator==2.*
+
+# Document check
+opencv-python==5.*
+pillow==12.*
+numpy==2.*
+pytesseract==0.3.*
+rapidocr==3.*
+onnxruntime==1.*
+mrz==0.6.*
+rapidfuzz==3.*
+
+# Face match. SCRFD detection and ArcFace recognition, both ONNX, run through
+# onnxruntime above. The model pack (buffalo_l, about 280 MB) downloads once into
+# ~/.insightface/models on first use.
+insightface==2.*
+onnx==1.*
+# TensorFlow stays for the liveness mesh only: the MediaPipe face landmarker is a
+# TFLite model and tf.lite.Interpreter is what runs it.
+pytest==8.*
+httpx==0.28.*
+pycountry==26.2.16
+ai-edge-litert==2.2.0

@@ -89,6 +89,7 @@ class FaceVerificationResponse(BaseModel):
     """Liveness and face match together, against a document scanned earlier."""
 
     verification_id: str
+    verification_status: str | None = None
     decision: Decision
     reasons: list[str]
     warnings: list[str]

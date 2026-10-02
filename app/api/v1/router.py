@@ -17,3 +17,6 @@ api_router.include_router(children.router)
 api_router.include_router(documents.router, tags=["documents"])
 api_router.include_router(face.router, tags=["face"])
 api_router.include_router(verifications.router, tags=["verifications"])
+
+from app.api.v1.routes import screening
+api_router.include_router(screening.router)

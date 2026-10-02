@@ -88,18 +88,27 @@ async function load() {
   const lead = document.getElementById('lead');
   const go = document.getElementById('go');
   const qr = document.getElementById('qr');
+  go.hidden = true;
+  qr.hidden = true;
 
   if (session.expired) {
     lead.textContent = 'This link has expired. Ask for a new one.';
     return;
   }
   if (!session.next_step) {
-    lead.textContent = 'All done. Thank you.';
+    lead.textContent = session.status === 'needs_review'
+      ? 'Your checks are complete and are being reviewed. Thank you.'
+      : 'All done. Thank you.';
     if (session.redirect_url) {
       go.hidden = false;
       go.href = session.redirect_url;
       go.textContent = 'Back to where you came from';
     }
+    return;
+  }
+
+  if (session.next_step === 'aml') {
+    lead.textContent = 'Completing your background check. Please wait.';
     return;
   }
 

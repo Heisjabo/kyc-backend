@@ -44,6 +44,7 @@ rapidfuzz==3.*
 # ~/.insightface/models on first use.
 insightface==2.*
 onnx==1.*
-# TensorFlow stays for the liveness mesh only: the MediaPipe face landmarker is a
-# TFLite model and tf.lite.Interpreter is what runs it.
-tensorflow==2.21.*
+# The liveness mesh uses the compact LiteRT interpreter for its TFLite model.
+ai-edge-litert==2.2.0
+httpx==0.28.*
+pycountry==26.2.16

@@ -302,6 +302,8 @@ def settle(db: Session, verification: Verification) -> Verification:
         current = latest.get(step.step)
         if current is None or step.attempt > current.attempt:
             latest[step.step] = step
+    from app.screening.yente import run_pending
+    run_pending(db, verification, latest)
     outcomes = [step.status for step in latest.values()]
 
     reasons = [reason for step in latest.values() for reason in step.reasons]
@@ -345,7 +347,10 @@ def _fire_callback(db: Session, verification: Verification) -> None:
             "reasons": step.reasons or [],
         })
 
+    aml_steps = [step for step in verification.steps if step.step == VerificationStep.aml]
+    aml = max(aml_steps, key=lambda step: step.attempt).result if aml_steps else None
     payload = {
+        "aml": aml or None,
         "reference": verification.reference,
         "status": verification.status.value if hasattr(verification.status, "value") else str(verification.status),
         "event": verification.event,

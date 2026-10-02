@@ -2,6 +2,9 @@
 
 In-house KYC service (FastAPI). Exposes APIs for identity verification.
 
+Persisted document and face verification journeys automatically finish with Pangolin AML sanctions
+screening. See [the flow, frontend contract and deployment guide](docs/AML.md).
+
 ## Requirements
 
 - Python 3.11

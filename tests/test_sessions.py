@@ -140,7 +140,7 @@ def stub_document(monkeypatch, decision=Decision.passed, reasons=None, stub_port
 def test_opening_a_verification_creates_the_row_and_its_steps(client, api_key, db_session):
     body = open_verification(client, api_key)
     assert body["status"] == "pending" and body["event"] == "request.received"
-    assert [step["step"] for step in body["steps"]] == ["document", "face"]
+    assert [step["step"] for step in body["steps"]] == ["document", "face", "aml"]
     assert all(step["status"] == "pending" for step in body["steps"])
     assert body["session_url"].endswith(token_of(body))
     assert body["customer_id"]

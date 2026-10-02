@@ -122,6 +122,7 @@ class ConsoleFile(BaseModel):
 
 
 class ConsoleVerificationDetail(ConsoleVerificationSummary):
+    aml: dict | None = None
     language: str | None
     warnings: list[str]
     started_at: datetime | None

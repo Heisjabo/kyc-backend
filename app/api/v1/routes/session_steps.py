@@ -78,6 +78,8 @@ def _require_turn(verification: Verification, step: VerificationStep) -> None:
             status.HTTP_422_UNPROCESSABLE_ENTITY,
             f"This verification does not include the {step.value} step",
         )
+    if verification.status.value in ("passed", "needs_review"):
+        raise HTTPException(status.HTTP_409_CONFLICT, "This verification is complete; open a new verification to repeat the checks")
     for name in verification.services:
         if name == step.value:
             return
@@ -89,7 +91,8 @@ def _require_turn(verification: Verification, step: VerificationStep) -> None:
 
 
 def _passed(verification: Verification, step: VerificationStep) -> bool:
-    return any(s.step == step and s.status == StepStatus.passed for s in verification.steps)
+    rows = [s for s in verification.steps if s.step == step]
+    return bool(rows) and max(rows, key=lambda s: s.attempt).status == StepStatus.passed
 
 
 def _read(upload: UploadFile, field: str) -> bytes:
@@ -516,6 +519,7 @@ def submit_face(
 
     return FaceVerificationResponse(
         verification_id=verification.reference,
+        verification_status=verification.status.value,
         decision=Decision.passed if passed else Decision.failed,
         reasons=list(dict.fromkeys(liveness.reasons + match.check.reasons)),
         warnings=list(dict.fromkeys(warnings)),
