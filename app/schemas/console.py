@@ -8,7 +8,7 @@ verifications, unlike the client API, which is scoped to one account.
 
 from datetime import date, datetime
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class ConsoleUserResponse(BaseModel):
@@ -191,6 +191,7 @@ class ConsoleApiKey(BaseModel):
     expires_at: datetime
     last_used_at: datetime | None
     revoked_at: datetime | None
+    suspended_at: datetime | None
 
 
 class ConsoleClientDetail(ConsoleClientSummary):
@@ -208,11 +209,27 @@ class ConsoleClientDetail(ConsoleClientSummary):
 
 # API keys across every client.
 
+class ConsoleApiKeyAction(BaseModel):
+    """The latest thing console staff did to a key."""
+
+    action: str  # "suspended", "resumed" or "expired"
+    by: str  # the staff member's email
+    reason: str | None
+    at: datetime
+
+
+class ConsoleApiKeyActionRequest(BaseModel):
+    """Why a key is being suspended, resumed or expired. Optional, kept in the audit log."""
+
+    reason: str | None = Field(default=None, max_length=500)
+
+
 class ConsoleApiKeyRow(ConsoleApiKey):
     id: str
-    # "active", "expiring" (within 30 days), "expired" or "revoked".
+    # "active", "expiring" (within 30 days), "suspended", "expired" or "revoked".
     state: str
     client: ConsoleClient
+    last_action: ConsoleApiKeyAction | None = None
 
 
 class ConsoleApiKeyList(BaseModel):

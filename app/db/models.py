@@ -161,6 +161,9 @@ class ApiKey(Base):
     # Written on use, so a key nobody calls can be found and removed.
     last_used_at: Mapped[Timestamp | None]
     revoked_at: Mapped[Timestamp | None]
+    # Set by Pangolin staff in the admin console to stop a key for now. Unlike
+    # revoking, it can be undone: clearing it lets the key work again.
+    suspended_at: Mapped[Timestamp | None]
     created_at: Mapped[CreatedAt]
 
     account: Mapped["Account"] = relationship(back_populates="api_keys")

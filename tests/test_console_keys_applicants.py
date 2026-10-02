@@ -66,7 +66,7 @@ def test_staff_see_every_clients_keys_with_their_state(client, db_session, setup
     assert newest["state"] == "active"
     assert "secret_hash" not in newest and "key" not in newest
     assert body["items"][1]["state"] == "expiring"
-    assert body["state_counts"] == {"active": 1, "expiring": 1, "expired": 0, "revoked": 0}
+    assert body["state_counts"] == {"active": 1, "expiring": 1, "suspended": 0, "expired": 0, "revoked": 0}
 
 
 def test_key_filters(client, db_session, setup):
