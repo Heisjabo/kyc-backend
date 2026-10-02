@@ -99,6 +99,8 @@ class ApiKeyResponse(BaseModel):
     created_at: datetime
     last_used_at: datetime | None
     revoked_at: datetime | None
+    # Set while Pangolin has suspended the key; it does not work until resumed.
+    suspended_at: datetime | None = None
     is_valid: bool
 
 

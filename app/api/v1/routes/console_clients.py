@@ -68,7 +68,7 @@ def _active_keys():
     """Per account: keys that are neither revoked nor expired."""
     return (
         select(ApiKey.account_id.label("account_id"), func.count().label("active_keys"))
-        .where(ApiKey.revoked_at.is_(None), ApiKey.expires_at > func.now())
+        .where(ApiKey.revoked_at.is_(None), ApiKey.suspended_at.is_(None), ApiKey.expires_at > func.now())
         .group_by(ApiKey.account_id)
         .subquery()
     )
@@ -178,7 +178,7 @@ def list_clients(
         active_keys=db.scalar(
             select(func.count())
             .select_from(ApiKey)
-            .where(ApiKey.account_id.in_(client_ids), ApiKey.revoked_at.is_(None), ApiKey.expires_at > func.now())
+            .where(ApiKey.account_id.in_(client_ids), ApiKey.revoked_at.is_(None), ApiKey.suspended_at.is_(None), ApiKey.expires_at > func.now())
         )
         or 0,
         verifications=db.scalar(select(func.count()).select_from(Verification).where(Verification.account_id.in_(client_ids))) or 0,
@@ -242,6 +242,7 @@ def read_client(
                 expires_at=k.expires_at,
                 last_used_at=k.last_used_at,
                 revoked_at=k.revoked_at,
+                suspended_at=k.suspended_at,
             )
             for k in api_keys
         ],

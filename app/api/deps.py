@@ -94,6 +94,18 @@ def console_product(product: str):
     return check
 
 
+def console_role(product: str, roles: tuple[str, ...]):
+    """Like console_product, but also requires one of `roles`. For console actions
+    that change something, which readonly, support and reviewer staff may not do."""
+
+    def check(account: Account = Depends(console_product(product))) -> Account:
+        if account.console_role not in roles:
+            raise HTTPException(status.HTTP_403_FORBIDDEN, "Your role cannot do this")
+        return account
+
+    return check
+
+
 def account_from_api_key(
     x_api_key: str | None = Header(default=None, alias=_API_KEY_HEADER),
     db: Session = Depends(get_session),
@@ -122,7 +134,7 @@ def account_from_api_key(
         raise refused
 
     now = datetime.now(UTC)
-    if key.revoked_at is not None or _expired(key.expires_at, now):
+    if key.revoked_at is not None or key.suspended_at is not None or _expired(key.expires_at, now):
         raise refused
 
     account = db.get(Account, key.account_id)

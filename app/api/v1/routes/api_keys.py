@@ -34,7 +34,8 @@ def _as_response(key: ApiKey) -> dict:
         "created_at": key.created_at,
         "last_used_at": key.last_used_at,
         "revoked_at": key.revoked_at,
-        "is_valid": key.revoked_at is None and expires > now,
+        "suspended_at": key.suspended_at,
+        "is_valid": key.revoked_at is None and key.suspended_at is None and expires > now,
     }
 
 
