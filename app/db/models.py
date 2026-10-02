@@ -270,6 +270,8 @@ class Applicant(Base):
     updated_at: Mapped[UpdatedAt]
 
     verifications: Mapped[list["Verification"]] = relationship(back_populates="applicant")
+    # The client this applicant belongs to, for reading only (the admin console lists it).
+    account: Mapped["Account"] = relationship(viewonly=True)
 
 
 class Verification(Base):
