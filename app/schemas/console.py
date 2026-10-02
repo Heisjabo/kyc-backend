@@ -130,3 +130,76 @@ class ConsoleVerificationDetail(ConsoleVerificationSummary):
     files: list[str]
     # Every file captured, oldest first, retakes included.
     evidence: list[ConsoleFile]
+
+
+# Client accounts, as staff see them: every organisation calling the API.
+
+class ConsoleClientOption(BaseModel):
+    """Enough to name a client in a filter."""
+
+    id: str
+    name: str
+    email: str
+
+
+class ConsoleClientSummary(BaseModel):
+    id: str
+    name: str
+    email: str
+    phone: str
+    country: str
+    status: str  # "active" or "suspended"
+    created_at: datetime
+    last_login_at: datetime | None
+    # Counted with the status a client would see now, so a lapsed session is expired.
+    verifications: int
+    passed: int
+    failed: int
+    needs_review: int
+    last_verification_at: datetime | None
+    # Neither revoked nor past their expiry.
+    active_keys: int
+
+
+class ConsoleClientOverview(BaseModel):
+    """Totals across every client, whatever the filters, for the page's headline numbers."""
+
+    clients: int
+    active: int
+    suspended: int
+    active_keys: int
+    verifications: int
+
+
+class ConsoleClientList(BaseModel):
+    items: list[ConsoleClientSummary]
+    total: int
+    page: int
+    page_size: int
+    overview: ConsoleClientOverview
+    # The countries clients have signed up from, for the country filter.
+    countries: list[str]
+
+
+class ConsoleApiKey(BaseModel):
+    """A key as its owner sees it in their list: never the key itself."""
+
+    name: str
+    prefix: str
+    created_at: datetime
+    expires_at: datetime
+    last_used_at: datetime | None
+    revoked_at: datetime | None
+
+
+class ConsoleClientDetail(ConsoleClientSummary):
+    first_name: str
+    last_name: str
+    country_code: str
+    city: str | None
+    address: str | None
+    in_progress: int
+    applicants: int
+    api_keys: list[ConsoleApiKey]
+    # The five most recent, newest first.
+    recent_verifications: list[ConsoleVerificationSummary]
