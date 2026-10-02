@@ -68,6 +68,13 @@ class Settings(BaseSettings):
     # Off by default: these are photos of people's faces.
     DEBUG_FRAMES_DIR: str = ""
 
+    # Pangolin AML runs after the identity checks. The token is backend-only.
+    YENTE_BASE_URL: str = "https://aml.tuesday.africa"
+    YENTE_API_TOKEN: str = ""
+    YENTE_SCREENING_DATASET: str = "sanctions"
+    YENTE_POSSIBLE_THRESHOLD: float = 0.7
+    YENTE_STRONG_THRESHOLD: float = 0.9
+
     DATABASE_URL: str = "postgresql+psycopg://kyc:kyc@localhost:5432/kyc"
 
     # Signing key for dashboard sessions. The default is for a developer's

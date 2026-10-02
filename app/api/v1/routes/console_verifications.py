@@ -26,6 +26,7 @@ from app.db.models import (
     Verification,
     VerificationFile,
     VerificationStatus,
+    VerificationStep,
 )
 from app.db.session import get_session
 from app.schemas.console import (
@@ -221,6 +222,7 @@ def read_verification(
     summary = _summary(verification, scan)
     return ConsoleVerificationDetail(
         **summary.model_dump(),
+        aml=latest[VerificationStep.aml].result or None if VerificationStep.aml in latest else None,
         language=verification.language,
         warnings=verification.warnings,
         started_at=verification.started_at,

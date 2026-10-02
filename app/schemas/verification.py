@@ -10,6 +10,7 @@ from datetime import date, datetime
 from pydantic import BaseModel, EmailStr, Field, model_validator
 
 from app.core.config import settings
+from app.screening.yente import ScreeningResult
 
 
 class ClaimedDetails(BaseModel):
@@ -30,7 +31,7 @@ class CreateVerificationRequest(BaseModel):
     # them if they send none.
     reference: str | None = Field(default=None, min_length=6, max_length=250)
     services: list[str] = Field(
-        default_factory=lambda: ["document", "face"],
+        default_factory=lambda: ["document", "face", "aml"],
         description="document, face, address, due_diligence, aml, consent",
     )
     applicant: ClaimedDetails = Field(default_factory=ClaimedDetails)
@@ -86,6 +87,7 @@ class VerificationResponse(BaseModel):
     reasons: list[str]
     warnings: list[str]
     steps: list[StepResponse]
+    aml: ScreeningResult | None = None
     expires_at: datetime | None
     created_at: datetime
     completed_at: datetime | None

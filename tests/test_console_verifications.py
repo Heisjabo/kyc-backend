@@ -228,7 +228,7 @@ def test_one_verification_with_its_steps_and_document(client, db_session, two_cl
     body = response.json()
     assert body["reference"] == row.reference
     assert body["client"]["name"] == "Acme Ltd"
-    assert [s["step"] for s in body["steps"]] == ["document", "face"]
+    assert [s["step"] for s in body["steps"]] == ["document", "face", "aml"]
     assert body["document_type"] == "passport"
     assert body["document"]["full_name"] == "KWAME MENSAH"
     assert body["document"]["document_number_last4"] == "5678"

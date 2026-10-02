@@ -569,8 +569,13 @@ function show(body, ok) {
     : freeze.toDataURL('image/jpeg');
 
   const verdict = document.getElementById('verdict');
-  verdict.className = 'verdict ' + body.decision;
-  verdict.innerHTML = `<strong>${WORDING[body.decision] || body.decision}</strong>` +
+  const pendingJourney = SESSION_TOKEN && body.verification_status === 'in_progress';
+  const reviewJourney = SESSION_TOKEN && body.verification_status === 'needs_review';
+  const label = reviewJourney ? 'Your checks need review'
+    : pendingJourney ? 'Face check complete; verification is still in progress'
+    : (WORDING[body.decision] || body.decision);
+  verdict.className = 'verdict ' + (reviewJourney || pendingJourney ? 'review' : body.decision);
+  verdict.innerHTML = `<strong>${label}</strong>` +
     (body.reasons.length ? `<span>${body.reasons.join(', ')}</span>` : '') +
     (body.warnings.length ? `<span class="muted">${body.warnings.join(', ')}</span>` : '');
 
@@ -596,8 +601,12 @@ function show(body, ok) {
   document.getElementById('start').disabled = false;
   window.scrollTo({ top: 0, behavior: 'smooth' });
 
-  const targetRedirect = body.redirect_url || sessionRedirectUrl;
-  if (targetRedirect && (body.decision === 'pass' || ok)) {
+  const targetRedirect = pendingJourney ? `/verify/${SESSION_TOKEN}`
+    : body.redirect_url || sessionRedirectUrl;
+  const finished = SESSION_TOKEN
+    ? ['passed', 'needs_review'].includes(body.verification_status) || pendingJourney
+    : body.decision === 'pass';
+  if (targetRedirect && finished) {
     const section = document.getElementById('redirect-section');
     const btn = document.getElementById('redirect-btn');
     if (section && btn) {

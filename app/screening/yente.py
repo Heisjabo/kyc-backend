@@ -7,6 +7,7 @@ from urllib.parse import quote
 
 import httpx
 from pydantic import BaseModel, Field, field_validator
+from app.core.config import settings
 
 
 class Identity(BaseModel):
@@ -52,19 +53,19 @@ class ScreeningResult(BaseModel):
 
 
 def screen(identity: Identity) -> ScreeningResult:
-    dataset = os.environ.get('YENTE_SCREENING_DATASET', 'sanctions')
-    possible = float(os.environ.get('YENTE_POSSIBLE_THRESHOLD', '0.7'))
-    strong = float(os.environ.get('YENTE_STRONG_THRESHOLD', '0.9'))
+    dataset = os.environ.get('YENTE_SCREENING_DATASET', settings.YENTE_SCREENING_DATASET)
+    possible = float(os.environ.get('YENTE_POSSIBLE_THRESHOLD', settings.YENTE_POSSIBLE_THRESHOLD))
+    strong = float(os.environ.get('YENTE_STRONG_THRESHOLD', settings.YENTE_STRONG_THRESHOLD))
     if not 0 < possible <= strong <= 1:
         raise ValueError('Thresholds must satisfy 0 < possible <= strong <= 1')
     properties = identity.properties()
     base = dict(dataset=dataset, screened_at=datetime.now(UTC).isoformat())
     try:
-        token = os.environ.get('YENTE_API_TOKEN', '').strip()
+        token = os.environ.get('YENTE_API_TOKEN', settings.YENTE_API_TOKEN).strip()
         headers = {'Authorization': 'Bearer ' + token} if token else {}
         with httpx.Client(timeout=20, trust_env=False, headers=headers) as client:
             response = client.post(
-                os.environ.get('YENTE_BASE_URL', 'http://127.0.0.1:8000').rstrip('/')
+                os.environ.get('YENTE_BASE_URL', settings.YENTE_BASE_URL).rstrip('/')
                 + '/match/' + quote(dataset, safe=''),
                 params={'threshold': possible, 'limit': 20},
                 json={'queries': {'identity': {'schema': 'Person', 'properties': properties}}},
@@ -101,7 +102,12 @@ def run_pending(db, verification, latest):
     face = latest.get(VerificationStep.face)
     if not document or not face or document.status != StepStatus.passed or face.status != StepStatus.passed:
         return
-    fields = document.extracted
+    # AML is the final service, including journeys with an address check.
+    if any(latest.get(VerificationStep(name)) is None or
+           latest[VerificationStep(name)].status != StepStatus.passed
+           for name in verification.services if name != 'aml'):
+        return
+    fields = document.extracted or {}
     try:
         identity = Identity(full_name=fields.get('full_name') or ' '.join(
             filter(None, [fields.get('given_names'), fields.get('surname')])),
@@ -110,7 +116,7 @@ def run_pending(db, verification, latest):
         result = screen(identity)
     except ValueError:
         result = ScreeningResult(outcome='unavailable', action='manual_review',
-            dataset=os.environ.get('YENTE_SCREENING_DATASET', 'sanctions'),
+            dataset=os.environ.get('YENTE_SCREENING_DATASET', settings.YENTE_SCREENING_DATASET),
             screened_at=datetime.now(UTC).isoformat(), error='Missing or invalid extracted identity')
     status = StepStatus.passed if result.outcome == 'no_match' else StepStatus.review
     finish_step(db, aml, status=status, result=result.model_dump(),

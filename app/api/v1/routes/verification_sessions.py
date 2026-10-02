@@ -64,6 +64,7 @@ def _as_response(verification: Verification) -> VerificationResponse:
         language=verification.language,
         reasons=verification.reasons,
         warnings=verification.warnings,
+        aml=latest[VerificationStep.aml].result or None if VerificationStep.aml in latest else None,
         steps=[
             StepResponse(
                 step=step.step.value,
@@ -96,9 +97,15 @@ def create_verification(
     The record exists from this moment, before they have done anything, so every
     step, image and callback that follows has something to hang off.
     """
+    # Existing clients that send document + face receive the final AML check too.
+    if 'document' in body.services and 'face' in body.services and 'aml' not in body.services:
+        body.services.append('aml')
     if 'aml' in body.services:
-        if len(set(body.services)) != len(body.services) or any(name not in body.services for name in ('document', 'face')) or not body.services.index('document') < body.services.index('face') < body.services.index('aml'):
-            raise HTTPException(422, 'AML requires document and face before aml, without duplicate services')
+        if (len(set(body.services)) != len(body.services)
+                or any(name not in body.services for name in ('document', 'face'))
+                or body.services.index('document') >= body.services.index('face')
+                or body.services[-1] != 'aml'):
+            raise HTTPException(422, 'AML requires document before face and must be the final service, without duplicates')
     unknown = [name for name in body.services if name not in _KNOWN_SERVICES]
     if unknown:
         raise HTTPException(
@@ -278,7 +285,7 @@ def read_session(token: str, db: Session = Depends(get_session)) -> SessionRespo
         reference=verification.reference,
         status=verification.status.value,
         services=verification.services,
-        next_step=outstanding[0] if outstanding else None,
+        next_step=outstanding[0] if outstanding and verification.status.value != "needs_review" else None,
         completed_steps=done,
         expired=service.is_expired(verification),
         redirect_url=verification.redirect_url,
