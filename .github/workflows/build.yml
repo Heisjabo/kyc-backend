@@ -121,7 +121,33 @@ jobs:
       - name: Ensure the face models are on the host
         run: |
           set -e
+
+          # `mkdir -p` cannot create a directory over a file or a dangling link, and
+          # fails with "File exists". A real directory, and the models in it, is left
+          # alone: a model added later is fetched on its own below, so there is never
+          # a reason to wipe the folder and download the other 200 MB again.
+          if [ -e models ] || [ -L models ]; then
+            if [ ! -d models ]; then
+              echo "models exists but is not a directory, removing it:"
+              ls -ld models
+              rm -f models
+            fi
+          fi
           mkdir -p models
+
+          # A file that is there but does not match its hash (an interrupted download,
+          # or a pin that has moved on) is dropped, so the downloads below fetch it
+          # again instead of the step failing on the check and failing again on the
+          # next run too.
+          drop_if_wrong() {
+            if [ -f "$2" ] && ! echo "$1  $2" | sha256sum -c - > /dev/null 2>&1; then
+              echo "$2 does not match its hash, fetching it again"
+              rm -f "$2"
+            fi
+          }
+          drop_if_wrong 5838f7fe053675b1c7a08b633df49e7af5495cee0493c7dcf6697200b85b5b91 models/det_10g.onnx
+          drop_if_wrong 4c06341c33c2ca1f86781dab0e829f88ad5b64be9fba56e56bc9ebdefc619e43 models/w600k_r50.onnx
+          drop_if_wrong a42c7d740fbb345ba9a26d469b22f301d73089ce3c6da993877ed2b6965a8ba1 models/ai_image_detector.onnx
 
           if [ ! -f models/face_detection_yunet_2023mar.onnx ]; then
             echo "downloading YuNet"
