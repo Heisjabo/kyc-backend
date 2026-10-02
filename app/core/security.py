@@ -181,6 +181,44 @@ def check_evidence_store() -> None:
     )
 
 
+def check_schema() -> None:
+    """Refuse to serve a database that is behind this code.
+
+    The alternative is what happened when the generated-image check first shipped:
+    the code inserted a column the database did not have, so every verification
+    creation returned 500 while /v1/health stayed green, which is the worst of both
+    worlds. Failing here is loud, the deploy's health poll catches it, and the log
+    says which revision is missing.
+
+    Skipped when there is no alembic_version table at all: the tests build their
+    schema straight from the models, and a brand new database has nothing to be
+    behind. Skipped in development too, where a developer migrates when they like.
+    """
+    if settings.ENVIRONMENT == "development":
+        return
+
+    from alembic.config import Config
+    from alembic.script import ScriptDirectory
+    from sqlalchemy import create_engine, inspect, text
+
+    engine = create_engine(settings.DATABASE_URL)
+    try:
+        with engine.connect() as connection:
+            if not inspect(connection).has_table("alembic_version"):
+                return
+            applied = connection.execute(text("select version_num from alembic_version")).scalar()
+    finally:
+        engine.dispose()
+
+    head = ScriptDirectory.from_config(Config("alembic.ini")).get_current_head()
+    if applied != head:
+        raise RuntimeError(
+            f"the database is at revision {applied!r} and this code expects {head!r}. "
+            "Run `alembic upgrade head` before serving, or let the entrypoint do it "
+            "by leaving RUN_MIGRATIONS unset."
+        )
+
+
 def check_configuration() -> None:
     """Refuse to start with a signing key anyone could guess.
 
@@ -189,6 +227,7 @@ def check_configuration() -> None:
     account, so the service stops rather than pretending to be guarded.
     """
     check_evidence_store()
+    check_schema()
 
     default = "development-secret-not-for-anywhere-else"
     if settings.ENVIRONMENT == "development":

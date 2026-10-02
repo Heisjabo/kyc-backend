@@ -272,17 +272,16 @@ def test_a_page_with_nothing_on_it_asks_for_another_photograph():
     assert "PROOF_NOT_READABLE" in result.reasons
 
 
-def test_a_pdf_statement_is_read_from_its_own_text(monkeypatch):
-    """A bank's own PDF carries its words inside it, which is both quicker and more
-    accurate than rendering the page and guessing at the print."""
+def test_a_pdf_statement_takes_its_words_from_the_text_layer(monkeypatch):
+    """A bank's own PDF carries its words inside it, and reading them is exact where
+    OCR of a rendering is a guess. That matters because the address comparison is
+    exact: one misread character would fail a genuine statement.
+
+    The pages are still rendered and read, but only to be scored and compared with,
+    never as the source of the text."""
     from app.pipeline import address as pipeline
 
-    def no_ocr(image):
-        raise AssertionError("the text layer should have been enough")
-
-    monkeypatch.setattr(pipeline, "read_document", no_ocr)
-
-    proof = digital_pdf(
+    layer = [
         "BANK OF KIGALI",
         "ACCOUNT STATEMENT",
         "Account holder: JEAN MUGISHA",
@@ -290,11 +289,23 @@ def test_a_pdf_statement_is_read_from_its_own_text(monkeypatch):
         "Opening balance: 120,000",
         "Closing balance: 98,400",
         "Date: " + (date.today() - timedelta(days=7)).strftime("%d-%m-%Y"),
-    )
-    result = scan(proof, claimed="KG 586 St, Kigali City", proof_type=ProofType.bank_statement)
-    assert result.decision == Decision.passed
+    ]
+    monkeypatch.setattr(pipeline, "text_lines", lambda data, max_pages=None: layer)
+
+    # OCR returns something deliberately mangled. If the step took its text from the
+    # rendering, the exact address match would fail on it.
+    class Line:
+        def __init__(self, text):
+            self.text = text
+
+    monkeypatch.setattr(pipeline, "read_document",
+                        lambda image: [Line("KG 5B6 St, Kigah City"), Line("BANK 0F KIGALI")])
+
+    result = scan(digital_pdf(*layer), claimed="KG 586 St, Kigali City",
+                  proof_type=ProofType.bank_statement)
     assert result.extracted.address_found is True
-    assert any("pdf text" in str(check.details.get("read", "")) for check in result.checks)
+    proof = [c for c in result.checks if c.name == "address_document_proof"][0]
+    assert "pdf text" in str(proof.details["read"])
 
 
 def test_a_scan_wrapped_in_a_pdf_is_rendered_and_read():
@@ -312,6 +323,99 @@ def test_a_scan_wrapped_in_a_pdf_is_rendered_and_read():
     result = scan(proof)
     assert result.decision == Decision.passed
     assert any("pdf rendered" in str(check.details.get("read", "")) for check in result.checks)
+
+
+def test_a_digital_pdf_is_scored_even_though_its_text_was_read_directly(monkeypatch):
+    """The gap this closes: a statement whose text can be read needs no rendering to
+    be understood, so it used to contribute no picture and was never asked whether a
+    generator had made it. A generated bill submitted as a digital PDF is the easiest
+    forgery in this flow and it went straight through."""
+    from app.pipeline import ai_image as check_module
+
+    scored: list = []
+
+    def every_page_is_generated(images):
+        scored.extend(images)
+        return [0.99] * len(images)
+
+    monkeypatch.setattr(check_module.ai_image, "available", lambda: True)
+    monkeypatch.setattr(check_module.ai_image, "probabilities", every_page_is_generated)
+
+    result = scan(
+        digital_pdf(
+            "BANK OF KIGALI",
+            "ACCOUNT STATEMENT",
+            "Account holder: JEAN MUGISHA",
+            "Address: KG 586 St, Kigali City",
+            "Closing balance: 98,400",
+            "Date: " + (date.today() - timedelta(days=5)).strftime("%d-%m-%Y"),
+        ),
+        proof_type=ProofType.bank_statement,
+    )
+    assert scored, "the pages were never handed to the detector"
+    assert "AI_GENERATED_IMAGE" in result.warnings
+    # Read from the text layer, and scored on the rendered page: both.
+    proof = [c for c in result.checks if c.name == "address_document_proof"][0]
+    assert "pdf text" in str(proof.details["read"])
+    assert result.decision == Decision.passed
+
+
+def test_a_text_layer_that_disagrees_with_the_page_goes_to_a_person(monkeypatch):
+    """The attack this closes: a PDF's text layer and its rendering are independent.
+    On a scan the text layer is whatever a scanner app wrote, or whatever somebody
+    replaced it with, so a bill can show Nairobi while its text says Kigali, and
+    every check here reads the text."""
+    from app.pipeline import address as pipeline
+
+    page_says_nairobi = scanned_pdf(
+        "REG ELECTRICITY BILL",
+        "Customer: JEAN MUGISHA",
+        "Address: NAIROBI KENYA",
+        "Meter number: 37200145",
+        "Units: 45 kWh",
+        "Date: " + (date.today() - timedelta(days=9)).strftime("%d-%m-%Y"),
+    )
+    # A text layer claiming the address the client gave us.
+    monkeypatch.setattr(pipeline, "text_lines", lambda data, max_pages=None: [
+        "REG ELECTRICITY BILL",
+        "Customer: JEAN MUGISHA",
+        "Address: KG 586 ST, KIGALI CITY",
+        "Meter number: 37200145",
+        "Units: 45 kWh",
+        "Date: " + (date.today() - timedelta(days=9)).strftime("%d-%m-%Y"),
+    ])
+
+    result = scan(page_says_nairobi)
+    assert result.decision == Decision.review
+    assert "PDF_TEXT_LAYER_DISAGREES" in result.reasons
+    check = [c for c in result.checks if c.name == "pdf_text_matches_page"][0]
+    assert check.details["address_in_text_layer"] is True
+    assert check.details["address_on_rendered_page"] is False
+
+
+def test_a_pdf_whose_text_matches_its_page_passes_the_cross_check():
+    result = scan(
+        digital_pdf(
+            "BANK OF KIGALI",
+            "ACCOUNT STATEMENT",
+            "Account holder: JEAN MUGISHA",
+            "Address: KG 586 St, Kigali City",
+            "Closing balance: 98,400",
+            "Date: " + (date.today() - timedelta(days=5)).strftime("%d-%m-%Y"),
+        ),
+        proof_type=ProofType.bank_statement,
+    )
+    check = [c for c in result.checks if c.name == "pdf_text_matches_page"][0]
+    assert check.status == CheckStatus.passed
+    assert result.decision == Decision.passed
+
+
+def test_the_cross_check_is_skipped_for_a_photograph():
+    """A photograph has no text layer to disagree with: what was read is what is
+    on it."""
+    result = scan(utility_bill())
+    check = [c for c in result.checks if c.name == "pdf_text_matches_page"][0]
+    assert check.status == CheckStatus.skipped
 
 
 def test_a_pdf_is_recognised_by_what_is_in_it_not_what_it_was_called():

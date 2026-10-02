@@ -32,6 +32,7 @@ from app.engines.image import InvalidImageError, decode_image
 from app.engines.ocr import read_document
 from app.engines.pdf import is_pdf, render_pages, text_lines
 from app.engines.quality import assess_quality
+from app.pipeline.ai_image import check_ai_generated
 from app.pipeline.document import names_on_document
 from app.rules import address as rules
 from app.schemas.address import AddressCheckResponse, AddressExtracted, ProofType
@@ -80,7 +81,7 @@ def scan_address_proof(
         return finish()
 
     try:
-        lines, qualities, sides = _read_proof(front, back)
+        lines, qualities, sides, pictures, on_the_page = _read_proof(front, back)
     except UnreadableProof as unreadable:
         checks.append(
             CheckResult(
@@ -115,8 +116,13 @@ def scan_address_proof(
     if not readable:
         return finish()
 
+    # Was the proof itself generated? A bill is text on a plain background, which is
+    # the easiest thing in this flow to produce with a generator. A PDF is scored on
+    # its rendered pages whether or not its text could be read directly.
+    checks.append(check_ai_generated(pictures, subject="address"))
     checks.append(_type_check(proof_type, lines))
     checks.append(_address_check(claimed_address, lines, extracted))
+    checks.append(_text_layer_agrees(claimed_address, lines, on_the_page, today))
     checks.append(_owner_check(names or [], lines))
     checks.append(_recency_check(lines, today, extracted))
     checks.append(
@@ -137,8 +143,11 @@ class UnreadableProof(Exception):
         self.reason = reason
 
 
-def _read_proof(front: bytes, back: bytes | None) -> tuple[list[str], dict, list[str]]:
-    """The text on the proof, the quality of each photograph, and what was read.
+def _read_proof(
+    front: bytes, back: bytes | None
+) -> tuple[list[str], dict, list[str], list[tuple[str, object]], list[str]]:
+    """The text on the proof, the quality of each photograph, what was read, and the
+    pictures themselves.
 
     A PDF is read from its own text layer when it has one, which a bank's own
     statement does, and rendered and OCRed when it does not, which a scan does not.
@@ -149,19 +158,41 @@ def _read_proof(front: bytes, back: bytes | None) -> tuple[list[str], dict, list
     lines: list[str] = []
     qualities: dict = {}
     read: list[str] = []
+    # Every picture this proof turned out to be, for the generator check. A PDF read
+    # from its own text layer contributes none: there is no image to score.
+    pictures: list[tuple[str, object]] = []
+    # What the rendered pages actually show, read by OCR, when the text came from a
+    # PDF's text layer instead. Empty for anything else, since then `lines` already
+    # is what the page shows.
+    on_the_page: list[str] = []
 
     for side, data in (("front", front), ("back", back)):
         if data is None:
             continue
 
         if is_pdf(data):
+            # Rendered whatever happens, because the generated-image check needs
+            # pixels. A statement whose text can be read directly used to contribute
+            # no picture at all, so a generated bill submitted as a digital PDF, the
+            # easiest document in this flow to produce and the only one we take as a
+            # PDF, was never examined. The text is still read from the text layer
+            # when there is one: that is accurate, and this is only for scoring.
+            pages = render_pages(data)
+            for number, page in enumerate(pages, start=1):
+                pictures.append((f"{side} page {number}", page))
+
             inside = text_lines(data)
             if len(inside) >= rules.MIN_TEXT_LINES:
                 lines.extend(inside)
-                read.append(f"{side}: pdf text")
+                # And read the pages as well, to compare with. A text layer is not
+                # obliged to say what the page shows: on a scan it is whatever a
+                # scanner app, or somebody else, put there.
+                for page in pages:
+                    on_the_page.extend(line.text for line in read_document(page))
+                read.append(f"{side}: pdf text, {len(pages)} page(s) scored and read")
                 continue
-            # A scan wrapped in a PDF: every page becomes a picture to read.
-            pages = render_pages(data)
+
+            # A scan wrapped in a PDF: the pages are all there is to read.
             if not pages:
                 raise UnreadableProof("PROOF_NOT_READABLE")
             for page in pages:
@@ -174,10 +205,11 @@ def _read_proof(front: bytes, back: bytes | None) -> tuple[list[str], dict, list
         except InvalidImageError:
             raise UnreadableProof("IMAGE_UNREADABLE") from None
         qualities[side] = assess_quality(image)
+        pictures.append((side, image))
         lines.extend(line.text for line in read_document(image))
         read.append(f"{side}: photograph")
 
-    return lines, qualities, read
+    return lines, qualities, read, pictures, on_the_page
 
 
 def _decide(checks: list[CheckResult]) -> Decision:
@@ -237,6 +269,59 @@ def _address_check(claimed: str, lines: list[str], extracted: AddressExtracted) 
             # was without opening the file.
             "document_text": document_text(lines)[:400],
         },
+    )
+
+
+def _text_layer_agrees(claimed: str, lines: list[str], on_the_page: list[str], today: date) -> CheckResult:
+    """Does a PDF's text layer say what its page shows?
+
+    The two are independent. A PDF carries text and it carries a rendering, and
+    nothing makes them agree: on a scan the text layer is whatever a scanner app
+    wrote, or whatever somebody replaced it with. So a document can show a Nairobi
+    address while its text layer says Kigali, and every check here reads the text,
+    which is the accurate thing to read right up until it is a lie.
+
+    This compares the two on the only things this step decides by: whether the
+    claimed address is on the page as well as in the text, and whether the newest
+    date agrees. A disagreement about the address goes to a person, because that is
+    exactly the shape of the attack and the address check cannot be trusted on its
+    own once the two differ. A disagreement about the date is a warning: OCR
+    misreads dates on a rendering often enough that failing on it would be noise.
+
+    Skipped for anything that is not a PDF read from its text layer, where `lines`
+    already is what the page shows.
+    """
+    if not on_the_page:
+        return CheckResult(name="pdf_text_matches_page", status=CheckStatus.skipped)
+
+    in_text = address_on_document(claimed, lines)
+    on_page = address_on_document(claimed, on_the_page)
+
+    text_dates = [d for line in lines for d in find_dates(line, today) if d <= today]
+    page_dates = [d for line in on_the_page for d in find_dates(line, today) if d <= today]
+    newest_text = max(text_dates) if text_dates else None
+    newest_page = max(page_dates) if page_dates else None
+    dates_agree = newest_text is None or newest_page is None or newest_text == newest_page
+
+    details = {
+        "address_in_text_layer": in_text,
+        "address_on_rendered_page": on_page,
+        "newest_date_in_text_layer": newest_text,
+        "newest_date_on_rendered_page": newest_page,
+    }
+
+    if in_text and not on_page:
+        return CheckResult(
+            name="pdf_text_matches_page",
+            status=CheckStatus.review,
+            reasons=["PDF_TEXT_LAYER_DISAGREES"],
+            details=details,
+        )
+    return CheckResult(
+        name="pdf_text_matches_page",
+        status=CheckStatus.passed,
+        warnings=[] if dates_agree else ["PDF_DATE_DISAGREES"],
+        details=details,
     )
 
 
