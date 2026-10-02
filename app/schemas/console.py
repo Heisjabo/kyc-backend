@@ -203,3 +203,57 @@ class ConsoleClientDetail(ConsoleClientSummary):
     api_keys: list[ConsoleApiKey]
     # The five most recent, newest first.
     recent_verifications: list[ConsoleVerificationSummary]
+
+
+# API keys across every client.
+
+class ConsoleApiKeyRow(ConsoleApiKey):
+    id: str
+    # "active", "expiring" (within 30 days), "expired" or "revoked".
+    state: str
+    client: ConsoleClient
+
+
+class ConsoleApiKeyList(BaseModel):
+    items: list[ConsoleApiKeyRow]
+    total: int
+    page: int
+    page_size: int
+    # How many match the other filters, for each state.
+    state_counts: dict[str, int]
+
+
+# Applicants: the people being verified, across every client.
+
+class ConsoleApplicantSummary(BaseModel):
+    id: str
+    customer_id: str
+    client_customer_id: str | None
+    name: str | None
+    email: str | None
+    phone: str | None
+    country: str | None
+    client: ConsoleClient
+    created_at: datetime
+    verifications: int
+    # The applicant's most recent verification, by the status a client would see now.
+    latest_status: str | None
+    latest_at: datetime | None
+
+
+class ConsoleApplicantList(BaseModel):
+    items: list[ConsoleApplicantSummary]
+    total: int
+    page: int
+    page_size: int
+    # By latest status, under the other filters; "none" counts applicants with no verification.
+    status_counts: dict[str, int]
+    countries: list[str]
+
+
+class ConsoleApplicantDetail(ConsoleApplicantSummary):
+    first_name: str | None
+    last_name: str | None
+    date_of_birth: date | None
+    # Every verification, newest first.
+    history: list[ConsoleVerificationSummary]
