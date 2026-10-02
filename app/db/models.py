@@ -392,6 +392,16 @@ class Step(Base):
     # on a phone while the rest happened on a laptop.
     device: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default=_EMPTY_OBJECT)
 
+    # Did any image this step received look generated? True, false, or null for a
+    # step that could not look: no image large enough to score, or the detector not
+    # installed. A step can carry several images (a front and a back, a bill and its
+    # second page, the frames of a face check), and this is true when any of them
+    # scored at or above AI_IMAGE_DETECT_THRESHOLD.
+    #
+    # It never changes the step's status. The score and the per-image scores are in
+    # `result`, under the ai_generated check.
+    ai_generated: Mapped[bool | None] = mapped_column(Boolean)
+
     started_at: Mapped[Timestamp | None]
     completed_at: Mapped[Timestamp | None]
     created_at: Mapped[CreatedAt]

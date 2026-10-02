@@ -1,14 +1,25 @@
 #!/bin/sh
 # Start the service.
 #
-# Migrations are not run unless RUN_MIGRATIONS is true. A deploy that quietly
-# changes the shape of a database holding people's identity documents is not
-# something to find out about afterwards, so it is opt-in and normally run by hand:
+# Migrations run before anything is served, unless RUN_MIGRATIONS is set to false.
+#
+# This used to be the other way round, opt-in, on the reasoning that a deploy should
+# not quietly reshape a database holding people's identity documents. That reasoning
+# was wrong in one direction and it cost a production outage: a merge deploys, so the
+# new code was already answering requests while the column it inserts did not exist
+# yet, and every POST /v1/verifications returned 500 while the health check stayed
+# green. The schema and the code that needs it have to arrive together, and the only
+# place that can be guaranteed is here, before uvicorn binds.
+#
+# Our migrations are additive. If one ever is not, that is the moment to deploy it
+# with RUN_MIGRATIONS=false and run it by hand:
 #
 #   docker compose exec kyc-api alembic upgrade head
 set -e
 
-if [ "${RUN_MIGRATIONS}" = "true" ]; then
+if [ "${RUN_MIGRATIONS}" = "false" ]; then
+  echo "skipping migrations (RUN_MIGRATIONS=false)"
+else
   echo "running migrations"
   alembic upgrade head
 fi

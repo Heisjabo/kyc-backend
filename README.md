@@ -25,6 +25,11 @@ unzip -j -o /tmp/buffalo_l.zip 'det_10g.onnx' 'w600k_r50.onnx' -d models/
 # MediaPipe face landmarker (~3.8 MB), the 478-point mesh used for liveness
 curl -sL -o models/face_landmarker.task \
   https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/latest/face_landmarker.task
+
+# AI-generated image detector (~87 MB), Community Forensics ViT-S. Optional: without
+# it the ai_generated check is skipped. Pinned to the author's corrected export.
+curl -sL -o models/ai_image_detector.onnx \
+  https://huggingface.co/buildborderless/CommunityForensics-DeepfakeDet-ViT/resolve/ac6ee457bea904a373065754107451793b56db00/onnx/model.onnx
 ```
 
 Expected SHA-256:
@@ -32,7 +37,62 @@ Expected SHA-256:
 ```
 5838f7fe053675b1c7a08b633df49e7af5495cee0493c7dcf6697200b85b5b91  det_10g.onnx
 4c06341c33c2ca1f86781dab0e829f88ad5b64be9fba56e56bc9ebdefc619e43  w600k_r50.onnx
+a42c7d740fbb345ba9a26d469b22f301d73089ce3c6da993877ed2b6965a8ba1  ai_image_detector.onnx
 ```
+
+### AI-generated image detection
+
+The document step and liveness both run an `ai_generated` check: was this image made
+by a generator? It uses the detector from *Community Forensics: Using Thousands of
+Generators to Train Fake Image Detectors* (Park and Owens, CVPR 2025, MIT), trained on
+images from 4,803 generators.
+
+- **Document:** the front, the back and the portrait on the front are scored, and the
+  highest score counts, since a forger may generate only the face.
+- **Liveness:** the still and two frames through the capture are scored, and the
+  median counts: a deepfake stream is generated in every frame.
+- **Address:** the proof is scored too. A PDF is **always** rendered and scored on
+  its pages, even when its text could be read directly from the text layer, because
+  a bill is the easiest document in this flow to generate and it is the only one we
+  accept as a PDF. The text still comes from the text layer when there is one, which
+  is more accurate than reading a rendering of it; the rendering exists to be scored
+  and to be compared with.
+- **A PDF's text layer is checked against its page.** The two are independent: on a
+  scan the text layer is whatever a scanner app wrote, or whatever somebody replaced
+  it with, so a bill can show a Nairobi address while its text says Kigali, and every
+  check here reads the text. When a PDF is read from its text layer its pages are
+  OCRed too, and the claimed address has to appear in both. In the text and not on
+  the page is `PDF_TEXT_LAYER_DISAGREES`, and the step goes to **review**: that is
+  the shape of the attack, and the address match cannot be trusted once the two
+  differ. Dates that disagree are a warning only, since OCR misreads them often
+  enough that failing would be noise.
+- **Verdict: it never fails a verification.** At `AI_IMAGE_DETECT_THRESHOLD` (0.9)
+  the step passes with the warning `AI_GENERATED_IMAGE` and records the flag; from
+  `AI_IMAGE_SUSPECT_THRESHOLD` (0.5) it warns `AI_GENERATED_SUSPECTED` without
+  setting the flag. Both are settings. The reason is that a detector which refuses
+  people would refuse real ones: it misses some diffusion images and flags
+  photographs run through a generative "enhance" app, which many phones now do by
+  default. So the other checks decide the verdict and this rides along as a flag a
+  person can act on.
+- **Every step records it.** `verification_steps.ai_generated` is true when one of
+  that step's images scored at or above the detect threshold, false when they were
+  scored and none did, and null when the step could not look: no image large enough,
+  or the model not installed. A step can carry several images, a front and a back, a
+  bill and its second page, the frames of a face check. The face step also fills
+  `face_checks.deepfake_checked`, `deepfake_passed` and `deepfake_score`. The score
+  and the per-image scores stay in the step's `result`.
+- Images under 256 pixels on the shorter side are not scored: the detector enlarges
+  everything, and enlargement alone moves the score.
+
+On public test images, real photographs stayed under 0.05 and GAN faces scored 0.99 to
+1.0, through resizing and JPEG compression. It can miss diffusion images, particularly
+once they have been resized or recompressed, and it flags photos run through
+generative "enhance" apps. It is one signal alongside liveness and face match, not a
+guarantee; tune the thresholds on real submissions.
+
+Use the pinned file above. The older export of the same model, which search results
+and the onnx-community mirror point to, was built from the wrong weights with an
+untrained head and scores noise.
 
 ## Run locally
 
@@ -83,9 +143,24 @@ build, and the deploy deliberately prunes only dangling images rather than runni
 `docker system prune -af`: this image installs TensorFlow and compiles insightface,
 so throwing away the build cache turns a two-minute deploy into twenty.
 
-**Migrations are not run by a deploy.** `RUN_MIGRATIONS` is off unless set, because
-a deploy that quietly reshapes a database holding people's identity documents is
-not something to find out about afterwards. Run them yourself:
+**Migrations run before the service serves anything**, in the entrypoint, unless
+`RUN_MIGRATIONS` is set to `false`.
+
+It was the other way round once, opt-in, and that cost an outage. A merge deploys,
+so the new code was answering requests while a column it inserts did not exist yet:
+every `POST /v1/verifications` returned 500 while `/v1/health` stayed green, because
+health touches no table. The schema and the code that needs it have to arrive
+together, and the entrypoint is the only place that can be guaranteed.
+
+Two things back that up. Migrations here are additive, and the one that adds
+`verification_steps.ai_generated` uses `ADD COLUMN IF NOT EXISTS`, because that
+column already exists on both databases from the first attempt. And `check_schema()`
+refuses to start when the database's revision is behind the code's head, so a
+deliberately skipped migration fails loudly at start-up rather than 500ing every
+request. It is skipped in development and on a database with no `alembic_version`
+table, which is how the tests build theirs.
+
+To run them by hand, deploy with `RUN_MIGRATIONS=false` and then:
 
 ```bash
 docker compose exec kyc-api alembic upgrade head
@@ -116,7 +191,7 @@ database on localhost, while the health check still passes.
 | `SESSION_TTL_MINUTES`, `MAX_SESSION_TTL_MINUTES` | |
 | `EMAIL_ENABLED`, `DASHBOARD_URL` | |
 | `WEB_CONCURRENCY` | workers, default 1. Each one loads SCRFD, ArcFace and the liveness mesh into its own memory |
-| `RUN_MIGRATIONS` | `true` only when a deploy should migrate |
+| `RUN_MIGRATIONS` | `false` only when a deploy should **not** migrate. Unset means it does |
 
 **`ENVIRONMENT`, `DATABASE_URL` and `JWT_SECRET` are required**: without them the
 deploy stops and names the ones that are missing, because a service with no
