@@ -76,6 +76,12 @@ IMAGE_SIDE = _pg_enum(ImageSide, "image_side")
 _EMPTY_LIST = text("'[]'::jsonb")
 _EMPTY_OBJECT = text("'{}'::jsonb")
 
+# The admin console's roles and products, the same ones pangolin-admin shows on
+# its Team & roles page. Kept as strings rather than a Postgres enum so a role can
+# be added without a migration.
+CONSOLE_ROLES = ("owner", "admin", "reviewer", "support", "readonly")
+CONSOLE_PRODUCTS = ("kyc", "sign")
+
 
 class Account(Base):
     """A customer of this service: the person or organisation calling the API.
@@ -114,6 +120,14 @@ class Account(Base):
 
     # A suspended account keeps its keys and its history; they simply stop working.
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"))
+
+    # Set only for Pangolin staff who sign in to the admin console (pangolin-admin).
+    # Null for every client account, which is what keeps a client out of it. The
+    # role is one of CONSOLE_ROLES; the products are the ones this person may open
+    # there ("kyc", "sign").
+    console_role: Mapped[str | None] = mapped_column(String(16))
+    console_products: Mapped[list] = mapped_column(JSONB, nullable=False, server_default=_EMPTY_LIST)
+
     last_login_at: Mapped[Timestamp | None]
     created_at: Mapped[CreatedAt]
     updated_at: Mapped[UpdatedAt]
@@ -256,6 +270,8 @@ class Applicant(Base):
     updated_at: Mapped[UpdatedAt]
 
     verifications: Mapped[list["Verification"]] = relationship(back_populates="applicant")
+    # The client this applicant belongs to, for reading only (the admin console lists it).
+    account: Mapped["Account"] = relationship(viewonly=True)
 
 
 class Verification(Base):
@@ -333,6 +349,9 @@ class Verification(Base):
     updated_at: Mapped[UpdatedAt]
 
     applicant: Mapped["Applicant | None"] = relationship(back_populates="verifications")
+    # The client the verification belongs to. Read-only from this side: nothing
+    # reaches verifications through Account.
+    account: Mapped["Account"] = relationship(viewonly=True)
     parent_verification: Mapped["Verification | None"] = relationship(
         remote_side="Verification.id", foreign_keys=[parent_verification_id]
     )
