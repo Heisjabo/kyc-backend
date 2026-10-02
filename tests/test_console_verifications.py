@@ -4,8 +4,15 @@ Against Postgres in a throwaway schema, like the other API tests, and skipped
 when it is not reachable.
 """
 
+import io
+import os
+import tempfile
 import uuid
 from datetime import UTC, date, datetime, timedelta
+
+import cv2
+import numpy as np
+from PIL import Image
 
 import pytest
 from fastapi.testclient import TestClient
@@ -14,11 +21,20 @@ from sqlalchemy.orm import sessionmaker
 
 from app.core.config import settings
 from app.db.base import Base
-from app.db.models import DocumentScan, Step, Verification, VerificationStep, VerificationStatus
+from app.db.models import (
+    DocumentScan,
+    FileKind,
+    Step,
+    Verification,
+    VerificationFile,
+    VerificationStatus,
+    VerificationStep,
+)
 from app.db.session import get_session
 from app.main import app
 from app.schemas.document import Decision, DocumentType
 from app.scripts.console_admin import create_console_account
+from app.storage import evidence
 
 PASSWORD = "horse-battery"
 COMMON = {"phone": "788123456", "country_code": "+250", "date_of_birth": "1990-01-01", "country": "Rwanda"}
@@ -233,3 +249,123 @@ def test_only_staff_with_kyc_access_may_look(client, db_session, two_clients):
     assert client.get("/v1/console/verifications").status_code == 401
     assert client.get("/v1/console/verifications", headers=auth(client_token)).status_code == 401
     assert client.get("/v1/console/verifications", headers=auth(sign_only)).status_code == 403
+
+
+# Evidence
+
+def jpeg(shade: int = 180) -> bytes:
+    buffer = io.BytesIO()
+    Image.fromarray(np.full((300, 400, 3), shade, dtype=np.uint8)).save(buffer, format="JPEG")
+    return buffer.getvalue()
+
+
+def mp4(frames: int = 30, width: int = 640, height: int = 360) -> bytes:
+    path = tempfile.mktemp(suffix=".mp4")
+    writer = cv2.VideoWriter(path, cv2.VideoWriter_fourcc(*"mp4v"), 10, (width, height))
+    for i in range(frames):
+        writer.write(np.full((height, width, 3), i * 8 % 255, dtype=np.uint8))
+    writer.release()
+    try:
+        with open(path, "rb") as handle:
+            return handle.read()
+    finally:
+        os.remove(path)
+
+
+def keep(db_session, verification: Verification, step: VerificationStep | None, kind: FileKind, data: bytes, content_type: str) -> VerificationFile:
+    stored = evidence.keep(verification.id, data, kind.value, content_type)
+    step_row = (
+        db_session.scalar(select(Step).where(Step.verification_id == verification.id, Step.step == step)) if step else None
+    )
+    row = VerificationFile(
+        verification_id=verification.id,
+        step_id=step_row.id if step_row else None,
+        kind=kind,
+        storage_key=stored.storage_key,
+        content_type=stored.content_type,
+        byte_size=stored.byte_size,
+        sha256=stored.sha256,
+    )
+    db_session.add(row)
+    db_session.commit()
+    return row
+
+
+@pytest.fixture()
+def captured(client, db_session, two_clients):
+    """The second Acme verification with a front, a back, a document portrait, a selfie and a video."""
+    v = db_session.scalar(select(Verification).where(Verification.reference == two_clients["acme_second"]["reference"]))
+    files = {
+        "front": keep(db_session, v, VerificationStep.document, FileKind.document_front, jpeg(170), "image/jpeg"),
+        "back": keep(db_session, v, VerificationStep.document, FileKind.document_back, jpeg(150), "image/jpeg"),
+        "portrait_on_document": keep(db_session, v, VerificationStep.document, FileKind.document_portrait, jpeg(130), "image/jpeg"),
+        "selfie": keep(db_session, v, VerificationStep.face, FileKind.portrait, jpeg(110), "image/jpeg"),
+        "video": keep(db_session, v, VerificationStep.face, FileKind.challenge_video, mp4(), "video/mp4"),
+    }
+    return v, files
+
+
+def test_the_detail_lists_every_captured_file(client, db_session, captured):
+    token = staff_token(client, db_session)
+    verification, files = captured
+    body = client.get(f"/v1/console/verifications/{verification.id}", headers=auth(token)).json()
+    listed = [(e["kind"], e["step"]) for e in body["evidence"]]
+    assert listed == [
+        ("document_front", "document"),
+        ("document_back", "document"),
+        ("document_portrait", "document"),
+        ("portrait", "face"),
+        ("challenge_video", "face"),
+    ]
+    video = body["evidence"][-1]
+    assert video["id"] == str(files["video"].id)
+    assert video["content_type"] == "video/mp4"
+    assert video["byte_size"] == files["video"].byte_size
+
+
+def test_a_file_comes_back_as_it_was_stored(client, db_session, captured):
+    token = staff_token(client, db_session)
+    verification, files = captured
+    response = client.get(f"/v1/console/verifications/{verification.id}/files/{files['back'].id}", headers=auth(token))
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "image/jpeg"
+    assert response.headers["cache-control"] == "private, max-age=300"
+    assert response.content == jpeg(150)
+
+
+def test_a_file_of_another_verification_is_not_found(client, db_session, captured, two_clients):
+    token = staff_token(client, db_session)
+    _, files = captured
+    other = db_session.scalar(select(Verification).where(Verification.reference == two_clients["beta"]["reference"]))
+    response = client.get(f"/v1/console/verifications/{other.id}/files/{files['front'].id}", headers=auth(token))
+    assert response.status_code == 404
+
+
+def test_a_video_has_a_still_thumbnail(client, db_session, captured):
+    token = staff_token(client, db_session)
+    verification, files = captured
+    response = client.get(f"/v1/console/verifications/{verification.id}/files/{files['video'].id}/thumbnail", headers=auth(token))
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "image/jpeg"
+    still = Image.open(io.BytesIO(response.content))
+    assert still.format == "JPEG"
+    assert still.width == 480  # scaled down from 640, keeping the shape
+    assert still.height == 270
+
+
+def test_only_readable_videos_have_a_thumbnail(client, db_session, captured):
+    token = staff_token(client, db_session)
+    verification, files = captured
+    image = client.get(f"/v1/console/verifications/{verification.id}/files/{files['selfie'].id}/thumbnail", headers=auth(token))
+    assert image.status_code == 404
+    broken = keep(db_session, verification, VerificationStep.face, FileKind.challenge_video, b"not a video at all", "video/webm")
+    unreadable = client.get(f"/v1/console/verifications/{verification.id}/files/{broken.id}/thumbnail", headers=auth(token))
+    assert unreadable.status_code == 404
+
+
+def test_files_need_kyc_access(client, db_session, captured):
+    verification, files = captured
+    sign_only = staff_token(client, db_session, email="signer@example.com", products=("sign",))
+    url = f"/v1/console/verifications/{verification.id}/files/{files['front'].id}"
+    assert client.get(url).status_code == 401
+    assert client.get(url, headers=auth(sign_only)).status_code == 403
