@@ -347,6 +347,9 @@ class Verification(Base):
     updated_at: Mapped[UpdatedAt]
 
     applicant: Mapped["Applicant | None"] = relationship(back_populates="verifications")
+    # The client the verification belongs to. Read-only from this side: nothing
+    # reaches verifications through Account.
+    account: Mapped["Account"] = relationship(viewonly=True)
     parent_verification: Mapped["Verification | None"] = relationship(
         remote_side="Verification.id", foreign_keys=[parent_verification_id]
     )

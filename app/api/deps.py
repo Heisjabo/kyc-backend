@@ -82,6 +82,18 @@ def current_console_account(
     return account
 
 
+def console_product(product: str):
+    """A dependency for console endpoints that belong to one product: the staff
+    account, if its console products include `product`, otherwise 403."""
+
+    def check(account: Account = Depends(current_console_account)) -> Account:
+        if product not in (account.console_products or []):
+            raise HTTPException(status.HTTP_403_FORBIDDEN, "This account cannot open that product")
+        return account
+
+    return check
+
+
 def account_from_api_key(
     x_api_key: str | None = Header(default=None, alias=_API_KEY_HEADER),
     db: Session = Depends(get_session),
