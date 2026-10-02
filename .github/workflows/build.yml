@@ -57,6 +57,7 @@ jobs:
             echo "CORS_ORIGINS=${{ secrets.CORS_ORIGINS }}";
 
             echo "YENTE_BASE_URL=${{ secrets.YENTE_BASE_URL }}";
+            echo "YENTE_API_TOKEN=${{ secrets.YENTE_API_TOKEN }}";
             echo "YENTE_SCREENING_DATASET=${{ secrets.YENTE_SCREENING_DATASET }}";
             echo "YENTE_POSSIBLE_THRESHOLD=${{ secrets.YENTE_POSSIBLE_THRESHOLD }}";
             echo "YENTE_STRONG_THRESHOLD=${{ secrets.YENTE_STRONG_THRESHOLD }}";

@@ -60,7 +60,9 @@ def screen(identity: Identity) -> ScreeningResult:
     properties = identity.properties()
     base = dict(dataset=dataset, screened_at=datetime.now(UTC).isoformat())
     try:
-        with httpx.Client(timeout=20, trust_env=False) as client:
+        token = os.environ.get('YENTE_API_TOKEN', '').strip()
+        headers = {'Authorization': 'Bearer ' + token} if token else {}
+        with httpx.Client(timeout=20, trust_env=False, headers=headers) as client:
             response = client.post(
                 os.environ.get('YENTE_BASE_URL', 'http://127.0.0.1:8000').rstrip('/')
                 + '/match/' + quote(dataset, safe=''),

@@ -1,6 +1,6 @@
 # AML integration
 
-Yente runs separately in Tuesday-Markets/palingo-aml. Set YENTE_BASE_URL to its
+Yente runs separately in Tuesday-Markets/pangolin-aml. Set YENTE_BASE_URL to its
 private service address and YENTE_SCREENING_DATASET to the loaded collection
 (sanctions for the smaller collection; default for broader licensed coverage).
 Set these values in the deployment's GitHub secrets as well as local .env.
@@ -21,3 +21,7 @@ coverage. The liveness model uses ai-edge-litert instead of full TensorFlow.
 
 Validation: full suite previously 293 passed, 1 real-frame test skipped;
 real sanctions HTTP match/no-match and authentication/gating checks passed.
+
+For the HTTPS deployment, set `YENTE_BASE_URL=https://aml.tuesday.africa`
+and `YENTE_API_TOKEN` to the private AML bearer token. This token is separate
+from each KYC account's `X-API-Key`. Keep both credentials on the backend.

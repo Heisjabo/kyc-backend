@@ -85,3 +85,15 @@ def test_other_account_cannot_read(client, api_key, monkeypatch):
                            headers={'Authorization': 'Bearer ' + token}).json()['key']
     response = client.get(f"/v1/verifications/{opened['reference']}/aml", headers={'X-API-Key': other_key})
     assert response.status_code == 404
+
+
+def test_private_aml_token(monkeypatch):
+    monkeypatch.setenv('YENTE_API_TOKEN', 'test-private-token')
+    def handle(request):
+        assert request.headers['Authorization'] == 'Bearer test-private-token'
+        return httpx.Response(200, json={'responses': {'identity': {
+            'status': 200, 'results': [], 'total': {'value': 0, 'relation': 'eq'}}}})
+    original = httpx.Client
+    monkeypatch.setattr(httpx, 'Client', lambda **kwargs: original(
+        transport=httpx.MockTransport(handle), **kwargs))
+    assert screen(Identity(full_name='Example Person')).outcome == 'no_match'
