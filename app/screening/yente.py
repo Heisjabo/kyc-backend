@@ -1,5 +1,6 @@
-"""Server-side identity screening; never treats an upstream failure as clearance."""
+"""Server-side identity screening; records unavailable screening separately from a successful no-match."""
 import os
+import logging
 import math
 import unicodedata
 from datetime import date, datetime, UTC
@@ -8,6 +9,9 @@ from urllib.parse import quote
 import httpx
 from pydantic import BaseModel, Field, field_validator
 from app.core.config import settings
+
+
+logger = logging.getLogger("uvicorn.error")
 
 
 class Identity(BaseModel):
@@ -83,7 +87,7 @@ def screen(identity: Identity) -> ScreeningResult:
                 # Truncated results cannot support a complete screening verdict.
                 raise ValueError('Incomplete matching results')
     except (httpx.HTTPError, ValueError, KeyError, TypeError):
-        return ScreeningResult(outcome='unavailable', action='manual_review',
+        return ScreeningResult(outcome='unavailable', action='allow_with_warning',
                                error='Screening service unavailable or incomplete response', **base)
     score = max(scores, default=0.0)
     outcome = 'strong_match' if score >= strong else 'possible_match' if score >= possible else 'no_match'
@@ -115,9 +119,15 @@ def run_pending(db, verification, latest):
             id_number=fields.get('document_number'))
         result = screen(identity)
     except ValueError:
-        result = ScreeningResult(outcome='unavailable', action='manual_review',
+        result = ScreeningResult(outcome='unavailable', action='allow_with_warning',
             dataset=os.environ.get('YENTE_SCREENING_DATASET', settings.YENTE_SCREENING_DATASET),
             screened_at=datetime.now(UTC).isoformat(), error='Missing or invalid extracted identity')
-    status = StepStatus.passed if result.outcome == 'no_match' else StepStatus.review
+    if result.outcome == 'unavailable':
+        result.action = 'allow_with_warning'
+    logger.info("AML result reference=%s outcome=%s action=%s highest_score=%s dataset=%s matches=%s error=%s",
+                verification.reference, result.outcome, result.action, result.highest_score,
+                result.dataset, len(result.matches), result.error)
+    status = StepStatus.passed if result.outcome in ('no_match', 'unavailable') else StepStatus.review
     finish_step(db, aml, status=status, result=result.model_dump(),
-                reasons=[] if status == StepStatus.passed else ['AML_' + result.outcome.upper()])
+                reasons=[] if status == StepStatus.passed else ['AML_' + result.outcome.upper()],
+                warnings=['AML_UNAVAILABLE'] if result.outcome == 'unavailable' else [])
