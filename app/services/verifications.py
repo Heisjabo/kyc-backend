@@ -302,6 +302,8 @@ def settle(db: Session, verification: Verification) -> Verification:
         current = latest.get(step.step)
         if current is None or step.attempt > current.attempt:
             latest[step.step] = step
+    from app.screening.yente import run_pending
+    run_pending(db, verification, latest)
     outcomes = [step.status for step in latest.values()]
 
     reasons = [reason for step in latest.values() for reason in step.reasons]

@@ -66,14 +66,14 @@ class Mesh:
 def _load():
     global _interpreter
     if _interpreter is None:
-        import tensorflow as tf
+        from ai_edge_litert.interpreter import Interpreter
 
         bundle = Path(settings.FACE_MESH_MODEL)
         if not bundle.exists():
             raise FileNotFoundError(f"Face mesh model not found at {bundle}")
         with zipfile.ZipFile(bundle) as archive:
             model = archive.read("face_landmarks_detector.tflite")
-        _interpreter = tf.lite.Interpreter(model_content=model)
+        _interpreter = Interpreter(model_content=model)
         _interpreter.allocate_tensors()
     return _interpreter
 

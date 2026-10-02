@@ -96,6 +96,9 @@ def create_verification(
     The record exists from this moment, before they have done anything, so every
     step, image and callback that follows has something to hang off.
     """
+    if 'aml' in body.services:
+        if len(set(body.services)) != len(body.services) or any(name not in body.services for name in ('document', 'face')) or not body.services.index('document') < body.services.index('face') < body.services.index('aml'):
+            raise HTTPException(422, 'AML requires document and face before aml, without duplicate services')
     unknown = [name for name in body.services if name not in _KNOWN_SERVICES]
     if unknown:
         raise HTTPException(
