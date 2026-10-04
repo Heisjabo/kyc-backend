@@ -535,7 +535,17 @@ def submit_face(
         status=StepStatus.passed if passed else StepStatus.failed,
         reasons=liveness.reasons + match.check.reasons,
         warnings=warnings,
-        result={"match_score": match.score, "threshold": match.threshold},
+        result={
+            "match_score": match.score,
+            "threshold": match.threshold,
+            # The liveness checks belong on the step's own record, as they do on the
+            # document and address steps, and finish_step reads the generated-image
+            # result off them to set verification_steps.ai_generated. Without them
+            # that flag was null on every face step even when the frames had been
+            # scored: production shows a selfie scored 0.002 in face_checks and
+            # nothing on its step.
+            "checks": [check.model_dump(mode="json") for check in liveness.checks],
+        },
     )
     verification = service.settle(db, verification)
 

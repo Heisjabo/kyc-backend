@@ -271,7 +271,7 @@ def test_a_retry_is_a_new_attempt_not_an_overwrite(client, api_key, db_session, 
 def test_steps_have_to_be_done_in_order(client, api_key):
     body = open_verification(client, api_key)
     response = client.post(f"/v1/sessions/{token_of(body)}/face",
-                           files=[("frames", ("f.jpg", image_bytes(), "image/jpeg"))])
+                           files=[("frames", (f"f{i}.jpg", image_bytes(), "image/jpeg")) for i in range(6)])
     assert response.status_code == 409
     assert "document" in response.json()["detail"]
 
@@ -282,7 +282,7 @@ def test_a_step_the_session_did_not_ask_for_is_refused(client, api_key, monkeypa
     client.post(f"/v1/sessions/{token_of(body)}/document", data={"document_type": "id_card"},
                 files={"front": ("front.jpg", image_bytes(), "image/jpeg")})
     response = client.post(f"/v1/sessions/{token_of(body)}/face",
-                           files=[("frames", ("f.jpg", image_bytes(), "image/jpeg"))])
+                           files=[("frames", (f"f{i}.jpg", image_bytes(), "image/jpeg")) for i in range(6)])
     assert response.status_code == 422
 
 
@@ -472,7 +472,7 @@ def test_a_document_with_no_face_stops_there(client, api_key, db_session, monkey
 
     # And the face step is not reachable.
     blocked = client.post(f"/v1/sessions/{token}/face",
-                          files=[("frames", ("f.jpg", image_bytes(), "image/jpeg"))])
+                          files=[("frames", (f"f{i}.jpg", image_bytes(), "image/jpeg")) for i in range(6)])
     assert blocked.status_code == 409
 
 
@@ -488,3 +488,75 @@ def test_a_birth_certificate_may_have_no_face(client, api_key, monkeypatch):
                            files={"front": ("front.jpg", image_bytes(), "image/jpeg")}).json()
     assert response["decision"] == "pass"
     assert "NO_PORTRAIT_ON_DOCUMENT" not in response["reasons"]
+
+
+# What the face step records about a generated image
+
+
+def stub_face(monkeypatch, ai_check: CheckResult):
+    """A face step whose liveness and match both pass, carrying `ai_check`."""
+    from app.api.v1.routes import session_steps
+    from app.schemas.face import ChallengeProgress, FaceMatchResult, LivenessResponse
+
+    def fake_liveness(payloads, challenge_type=None, resting=None, claims=None):
+        return LivenessResponse(
+            decision=Decision.passed, reasons=[], warnings=list(ai_check.warnings),
+            challenge=ChallengeProgress(type="circle", required=["left", "right"],
+                                        completed=["left", "right"], missing=[]),
+            baseline_yaw=0.0, baseline_pitch=0.0, planarity=12.0,
+            frames_received=6, frames_with_face=6, poses=[], capture=None,
+            checks=[CheckResult(name="capture", status=CheckStatus.passed), ai_check],
+            processing_ms=5,
+        )
+
+    def fake_match(document_vector, captured):
+        return FaceMatchResult(score=0.6, best_score=0.6, frames_compared=1, threshold=0.4,
+                               check=CheckResult(name="face_match", status=CheckStatus.passed))
+
+    monkeypatch.setattr(session_steps, "check_liveness", fake_liveness)
+    monkeypatch.setattr(session_steps, "match_faces", fake_match)
+
+
+def face_step_row(client, api_key, db_session, monkeypatch, ai_check):
+    stub_document(monkeypatch)
+    stub_face(monkeypatch, ai_check)
+    body = open_verification(client, api_key)
+    token = token_of(body)
+    client.post(f"/v1/sessions/{token}/document", data={"document_type": "id_card"},
+                files={"front": ("front.jpg", image_bytes(), "image/jpeg")})
+    response = client.post(f"/v1/sessions/{token}/face",
+                           files=[("frames", (f"f{i}.jpg", image_bytes(), "image/jpeg")) for i in range(6)])
+    assert response.status_code == 200, response.text
+    verification = db_session.scalar(select(Verification).where(Verification.reference == body["reference"]))
+    step = db_session.scalar(select(Step).where(Step.verification_id == verification.id, Step.step == "face"))
+    check = db_session.scalar(select(FaceCheck).where(FaceCheck.verification_id == verification.id))
+    return step, check
+
+
+def test_a_generated_selfie_is_flagged_on_the_face_step_itself(client, api_key, db_session, monkeypatch):
+    """The face step used to hand finish_step a result with no checks in it, so
+    verification_steps.ai_generated was null on every selfie even when the frames had
+    been scored and face_checks said so. Production had a selfie scored 0.002 with
+    nothing on its step."""
+    flagged = CheckResult(name="ai_generated", status=CheckStatus.passed,
+                          warnings=["AI_GENERATED_IMAGE"], details={"score": 0.99})
+    step, check = face_step_row(client, api_key, db_session, monkeypatch, flagged)
+    assert step.status == StepStatus.passed          # a warning, never a failure
+    assert step.ai_generated is True
+    assert check.deepfake_checked is True and check.deepfake_passed is False
+    assert check.deepfake_score == 0.99
+
+
+def test_a_real_selfie_is_recorded_as_checked_and_clean(client, api_key, db_session, monkeypatch):
+    clean = CheckResult(name="ai_generated", status=CheckStatus.passed, details={"score": 0.002})
+    step, check = face_step_row(client, api_key, db_session, monkeypatch, clean)
+    assert step.ai_generated is False
+    assert check.deepfake_passed is True and check.deepfake_score == 0.002
+
+
+def test_a_selfie_that_could_not_be_scored_says_nothing_either_way(client, api_key, db_session, monkeypatch):
+    skipped = CheckResult(name="ai_generated", status=CheckStatus.skipped,
+                          details={"reason": "no image large enough to score"})
+    step, check = face_step_row(client, api_key, db_session, monkeypatch, skipped)
+    assert step.ai_generated is None
+    assert check.deepfake_checked is False
