@@ -19,6 +19,10 @@ pypdfium2==5.*
 # string. Pure Python, no dependencies of its own.
 segno==1.6.*
 
+# The verification report PDF (app/reports/verification.py). BSD, ships wheels,
+# and needs no system libraries in the image.
+reportlab==4.*
+
 # Evidence on Google Drive: a service account uploads and reads it back, and
 # nothing is ever shared from there. See app/storage/drive.py.
 google-api-python-client==2.*
