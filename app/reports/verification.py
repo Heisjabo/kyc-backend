@@ -90,8 +90,6 @@ TINT = colors.HexColor("#F5F8FC")
 GREEN = colors.HexColor("#2E7D5B")
 RED = colors.HexColor("#C0392B")
 AMBER = colors.HexColor("#D98E04")
-BLUE = colors.HexColor("#2563EB")
-GREY = colors.HexColor("#9CA3AF")
 
 PAGE_WIDTH, PAGE_HEIGHT = A4
 MARGIN = 34
@@ -102,9 +100,9 @@ _OUTCOME = {
     VerificationStatus.passed: ("Verification has been successfully completed and accepted", "Accepted", GREEN),
     VerificationStatus.failed: ("Verification has been completed and declined", "Declined", RED),
     VerificationStatus.needs_review: ("Verification has been completed and is waiting for manual review", "Review", AMBER),
-    VerificationStatus.in_progress: ("Verification has been started and is not finished yet", "In Progress", BLUE),
-    VerificationStatus.pending: ("Verification has been created and has not been started", "Pending", GREY),
-    VerificationStatus.expired: ("Verification link expired before the verification was completed", "Expired", GREY),
+    VerificationStatus.in_progress: ("Verification has been started and is not finished yet", "In Progress", AMBER),
+    VerificationStatus.pending: ("Verification has been created and has not been started", "Pending", AMBER),
+    VerificationStatus.expired: ("Verification link expired before the verification was completed", "Expired", RED),
 }
 
 _SERVICE_NAMES = {
@@ -395,6 +393,7 @@ _SUB = ParagraphStyle("sub", parent=_BASE, fontName=FONT_BOLD, fontSize=9, leadi
 _BADGE = ParagraphStyle("badge", parent=_BASE, fontName=FONT_BOLD, fontSize=9, textColor=colors.white,
                         alignment=TA_CENTER)
 _CAPTION = ParagraphStyle("caption", parent=_BOLD, fontSize=8)
+_PLACEHOLDER = ParagraphStyle("placeholder", parent=_SMALL, alignment=TA_CENTER)
 
 
 def _p(text, style=_BASE) -> Paragraph:
@@ -418,7 +417,9 @@ class Mark(Flowable):
     def draw(self):
         c = self.canv
         r = self.SIZE / 2
-        colour = {PASS: GREEN, FAIL: RED, REVIEW: AMBER}.get(self.outcome, GREY)
+        # Green for a pass, red for a failure, yellow for everything still open:
+        # in review, not performed yet, or not checked.
+        colour = {PASS: GREEN, FAIL: RED}.get(self.outcome, AMBER)
         c.setFillColor(colour)
         c.circle(r, r, r, stroke=0, fill=1)
         c.setStrokeColor(colors.white)
@@ -573,7 +574,7 @@ def _picture(data: bytes | None, max_width: float, max_height: float) -> Flowabl
         image = Image(io.BytesIO(data), width=w * scale, height=h * scale)
         image.hAlign = "LEFT"
         return image
-    box = Table([[_p("Image not available", _SMALL)]], colWidths=[max_width], rowHeights=[max_height * 0.6])
+    box = Table([[_p("Image not available", _PLACEHOLDER)]], colWidths=[max_width], rowHeights=[max_height * 0.6])
     box.setStyle(TableStyle([
         ("BACKGROUND", (0, 0), (-1, -1), TINT),
         ("ALIGN", (0, 0), (-1, -1), "CENTER"),
@@ -607,7 +608,7 @@ def _headline(data: ReportData) -> list:
     v = data.verification
     sentence, badge_text, colour = _OUTCOME[data.status]
     outcome = {VerificationStatus.passed: PASS, VerificationStatus.failed: FAIL,
-               VerificationStatus.needs_review: REVIEW}.get(data.status)
+               VerificationStatus.expired: FAIL, VerificationStatus.needs_review: REVIEW}.get(data.status)
 
     badge = Table([[_p(badge_text, _BADGE)]], colWidths=[72], rowHeights=[20])
     badge.setStyle(TableStyle([
@@ -989,7 +990,7 @@ class _NumberedCanvas(pdfcanvas.Canvas):
         self.setFont(FONT_BOLD, 15)
         self.drawString(MARGIN, PAGE_HEIGHT - 29, PRODUCT)
         self.setFont(FONT_MEDIUM, 8)
-        self.drawRightString(PAGE_WIDTH - MARGIN, PAGE_HEIGHT - 28, "Verification Report")
+        self.drawRightString(PAGE_WIDTH - MARGIN, PAGE_HEIGHT - 28, "Verification Proof")
 
         self.setStrokeColor(BORDER)
         self.setLineWidth(0.6)
@@ -1031,7 +1032,7 @@ def render(data: ReportData) -> bytes:
     out = io.BytesIO()
     document = SimpleDocTemplate(
         out, pagesize=A4, leftMargin=MARGIN, rightMargin=MARGIN, topMargin=64, bottomMargin=52,
-        title=f"Verification Report {v.reference}", author=PRODUCT,
+        title=f"Verification Proof {v.reference}", author=PRODUCT,
         subject="Identity verification report", initialFontName=FONT,
     )
     generated = _stamp(data.generated_at) + " UTC"
