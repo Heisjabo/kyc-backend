@@ -32,6 +32,7 @@ from app.schemas.verification import (
     VerificationResponse,
 )
 from app.reports import verification as report
+from app.services import due_diligence as forms
 from app.services import verifications as service
 from app.storage import evidence
 
@@ -101,6 +102,11 @@ def create_verification(
     # Existing clients that send document + face receive the final AML check too.
     if 'document' in body.services and 'face' in body.services and 'aml' not in body.services:
         body.services.append('aml')
+    # A form_id is how Shufti's clients ask for the questionnaire, so sending one
+    # is enough: the due diligence step is added for them, ahead of AML.
+    if body.form_id and VerificationStep.due_diligence.value not in body.services:
+        at = body.services.index('aml') if 'aml' in body.services else len(body.services)
+        body.services.insert(at, VerificationStep.due_diligence.value)
     if 'aml' in body.services:
         if (len(set(body.services)) != len(body.services)
                 or any(name not in body.services for name in ('document', 'face'))
@@ -124,6 +130,21 @@ def create_verification(
             status.HTTP_422_UNPROCESSABLE_ENTITY,
             "applicant.address is required when the address service is requested",
         )
+
+    if VerificationStep.due_diligence.value in body.services:
+        if not body.form_id:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                "form_id is required when the due_diligence service is requested",
+            )
+        form = forms.by_public_id(db, body.form_id)
+        # A form that does not exist and one this client was not given read the
+        # same, so a client cannot find out which form ids exist.
+        if form is None or form.status != "active" or not forms.usable_by(db, form, account.id):
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                f"No active due diligence form {body.form_id!r} on this account",
+            )
 
     claimed = body.applicant.model_dump(mode="json", exclude_none=True)
     try:

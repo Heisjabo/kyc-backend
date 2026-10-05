@@ -790,16 +790,42 @@ def _address(data: ReportData) -> list:
     return [_card(rows, "Address Verification")]
 
 
+# The names Shufti's report gives each kind of question.
+_QUESTION_TYPES = {
+    "text": "Text", "textarea": "Text", "number": "Number", "amount": "Text", "date": "Date",
+    "select": "Single Select", "multi_select": "Multi Select", "country": "Countries List",
+    "yes_no": "Yes/No", "file": "File",
+}
+
+
+def _answer(kind: str, value) -> str:
+    """A file answer by its name (the file itself is in the verification's
+    evidence), and a country by its name, as Shufti's report shows them."""
+    if isinstance(value, dict) and "file_id" in value:
+        return value.get("name") or "File attached"
+    if kind == "country" and isinstance(value, str):
+        return _country(value)
+    return _text(value)
+
+
 def _due_diligence(data: ReportData) -> list:
     step = data.steps.get(VerificationStep.due_diligence)
     answers = (step.extracted if step else None) or {}
-    rows = [_band("DDF"), _pairs([("Form", data.verification.form_id)], columns=1)]
+    # The questions as they were when this person answered them, kept on the step.
+    snapshot = ((step.result if step else None) or {}).get("form") or {}
+    questions = snapshot.get("fields") or [
+        {"key": key, "label": _humanise(str(key)), "type": "multi_select" if isinstance(value, list) else "text"}
+        for key, value in answers.items()
+    ]
+    name = snapshot.get("name")
+    rows = [_band("DDF"), _pairs([("Form", f"{name} ({data.verification.form_id})" if name else data.verification.form_id)], columns=1)]
     if answers:
         inner = CONTENT_WIDTH - 20
         rows.append(_table(
             ["Sr no", "Question(s)", "Type", "Answer", "Status"],
-            [[str(i), _humanise(str(q)), "List" if isinstance(a, list) else "Text", _text(a), ""]
-             for i, (q, a) in enumerate(answers.items(), start=1)],
+            [[str(i), question["label"], _QUESTION_TYPES.get(question["type"], _humanise(question["type"])),
+              _answer(question["type"], answers.get(question["key"])), ""]
+             for i, question in enumerate(questions, start=1)],
             [36, inner * 0.45 - 36, inner * 0.13, inner * 0.3, inner * 0.12],
         ))
     else:
