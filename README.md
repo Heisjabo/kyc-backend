@@ -402,6 +402,12 @@ request is refused with 422 without it. There is nothing to check a bill against
 otherwise, and finding that out at the step means the person is standing there
 holding one.
 
+`form_id` attaches a **due diligence form**, the way Shufti's questionnaire uuid
+does. Sending one is enough: `due_diligence` is added to `services` for you, ahead
+of `aml`. The form has to be active and given to your account, otherwise the
+request is refused with 422. `GET /v1/due-diligence/forms` lists the ones you can
+use.
+
 ### Endpoints
 
 | | |
@@ -412,6 +418,9 @@ holding one.
 | `POST /v1/sessions/{token}/document` | submit the document. Link only |
 | `POST /v1/sessions/{token}/face` | liveness and the face match. Link only |
 | `POST /v1/sessions/{token}/address` | upload a proof of address. Link only |
+| `GET /v1/due-diligence/forms` | the forms this account may attach. API key |
+| `GET /v1/sessions/{token}/due-diligence` | the questions to ask. Link only |
+| `POST /v1/sessions/{token}/due-diligence` | the answers: `answers` as JSON, plus one file part per file question, named by its key. Link only |
 
 `session_url` in the response points at the first of these:
 
@@ -570,9 +579,6 @@ in reports rather than linked.
 
 Deliberately parked, in the order they matter:
 
-- **The due diligence form.** A step type in the schema already, so it is a
-  handler rather than a migration. Our own Shufti integration sends
-  `questionnaire`, which is the shape to match.
 - **Tamper detection on an address proof**, which is the one check in the address
   step reported as not run. See below.
 - **Callbacks.** The table is there and nothing writes to it: we do not yet tell
@@ -588,6 +594,29 @@ Deliberately parked, in the order they matter:
   is sent.
 - **Calibration.** The face threshold is drawn between two small measured
   groups, not set from measured error rates over a real population.
+
+## Due diligence forms
+
+Written by Pangolin staff in the admin console (`/v1/console/due-diligence/forms`):
+owners and admins create and edit them, every other console role reads them.
+A form has a name, a status (`draft`, `active`, `archived`), the clients allowed
+to use it, and its questions. Each question has a `key`, a label, a type, and
+whether it is required:
+
+`text`, `textarea`, `number`, `amount`, `date`, `select`, `multi_select`,
+`country`, `yes_no`, `file`
+
+`select` and `multi_select` carry their `options`. A file is an image or a PDF up
+to 15 MB, kept with the verification's other evidence.
+
+The `key` is what ties an answer to its question, so it stays the same when the
+wording changes. The step keeps a copy of the questions it was answered against,
+so editing a form never changes what an old answer meant. A form is never
+deleted, only archived: archiving stops new verifications from using it, not the
+ones already sent.
+
+The Net worth assessment the Shufti journey asks today is created by the
+migration as `net_worth_assessment`, active, with no clients.
 
 ## Document check
 

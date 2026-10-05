@@ -46,7 +46,9 @@ from app.rules import face as face_rules
 from app.schemas.address import AddressCheckResponse, ProofType
 from app.schemas.document import Applicant as ApplicantDetails
 from app.schemas.document import Decision, DocumentCheckResponse, DocumentType
+from app.schemas.due_diligence import Answer, DueDiligenceResult, SessionForm
 from app.schemas.face import FaceVerificationResponse
+from app.services import due_diligence as forms
 from app.services import verifications as service
 from app.storage import evidence, sessions
 
@@ -125,21 +127,21 @@ def _read_proof(upload: UploadFile, field: str) -> bytes:
 
 
 def _keep_file(db: Session, verification: Verification, step: Step, kind: FileKind,
-               data: bytes, content_type: str) -> None:
+               data: bytes, content_type: str) -> VerificationFile | None:
     stored = evidence.keep(verification.id, data, kind.value, content_type)
     if stored is None:
-        return
-    db.add(
-        VerificationFile(
-            verification_id=verification.id,
-            step_id=step.id,
-            kind=kind,
-            storage_key=stored.storage_key,
-            content_type=stored.content_type,
-            byte_size=stored.byte_size,
-            sha256=stored.sha256,
-        )
+        return None
+    row = VerificationFile(
+        verification_id=verification.id,
+        step_id=step.id,
+        kind=kind,
+        storage_key=stored.storage_key,
+        content_type=stored.content_type,
+        byte_size=stored.byte_size,
+        sha256=stored.sha256,
     )
+    db.add(row)
+    return row
 
 
 def _ai_check(liveness) -> bool | None:
@@ -607,3 +609,131 @@ def _parse_steps(steps: str | None) -> dict[int, str] | None:
         return {int(entry["index"]): str(entry["step"]) for entry in json.loads(steps)}
     except (ValueError, TypeError, KeyError):
         return None
+
+
+def _session_form(db: Session, verification: Verification):
+    form = forms.by_public_id(db, verification.form_id) if verification.form_id else None
+    if form is None:
+        # Initiation refuses this, so reaching it means the form was deleted since.
+        raise HTTPException(status.HTTP_409_CONFLICT, "The form for this verification no longer exists")
+    return form
+
+
+@router.get("/{token}/due-diligence", response_model=SessionForm)
+def read_due_diligence_form(token: str, db: Session = Depends(get_session)) -> SessionForm:
+    """The questions this person is asked, as the client's form has them now.
+
+    Served even if the form has been archived since the link was sent: archiving
+    stops new verifications from using it, not the ones already under way.
+    """
+    verification = _open_session(db, token)
+    if VerificationStep.due_diligence.value not in verification.services:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY, "This verification does not include the due_diligence step"
+        )
+    form = _session_form(db, verification)
+    return SessionForm(
+        form_id=form.public_id,
+        name=form.name,
+        description=form.description,
+        fields=forms.fields_of(form),
+        max_file_bytes=forms.MAX_FILE_BYTES,
+    )
+
+
+@router.post("/{token}/due-diligence", response_model=DueDiligenceResult)
+async def submit_due_diligence(token: str, request: Request, db: Session = Depends(get_session)) -> DueDiligenceResult:
+    """Answer the due diligence form.
+
+    Sent as multipart/form-data:
+
+      * `answers`: a JSON object of every answer that is not a file, keyed by the
+        question's `key`. A multi_select answer is a list; a country is its
+        two-letter code.
+      * one part per file question, named by that question's `key`: an image or a
+        PDF, up to 15 MB.
+
+    Every question is checked against the form. A required one left blank, or an
+    answer the form does not allow, is refused with a 422 naming the question
+    (`detail.key`), and nothing is recorded. A form that is accepted passes the
+    step: these are answers for a person to read, not a check with a verdict.
+
+    The step keeps a copy of the questions it was answered against, so editing
+    the form later never changes what an old answer meant.
+    """
+    verification = _open_session(db, token)
+    _require_turn(verification, VerificationStep.due_diligence)
+    form = _session_form(db, verification)
+    fields = forms.fields_of(form)
+
+    submitted = await request.form()
+    try:
+        given = json.loads(submitted.get("answers") or "{}")
+    except (TypeError, ValueError):
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "answers must be a JSON object") from None
+    if not isinstance(given, dict):
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "answers must be a JSON object")
+
+    def refuse(key: str, message: str):
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, {"key": key, "message": message})
+
+    values: dict = {}
+    uploads: dict = {}
+    for field in fields:
+        if field.type != "file":
+            try:
+                values[field.key] = forms.check_answer(field, given.get(field.key))
+            except forms.AnswerError as problem:
+                refuse(problem.key, str(problem))
+            continue
+
+        upload = submitted.get(field.key)
+        if not hasattr(upload, "read"):
+            if field.required:
+                refuse(field.key, f"{field.label}: this question is required")
+            values[field.key] = None
+            continue
+        if upload.content_type not in forms.ALLOWED_FILE_TYPES:
+            refuse(field.key, f"{field.label}: upload an image or a PDF")
+        data = await upload.read(forms.MAX_FILE_BYTES + 1)
+        if len(data) > forms.MAX_FILE_BYTES:
+            refuse(field.key, f"{field.label}: the file is larger than {forms.MAX_FILE_BYTES // (1024 * 1024)} MB")
+        if not data:
+            if field.required:
+                refuse(field.key, f"{field.label}: the file is empty")
+            values[field.key] = None
+            continue
+        uploads[field.key] = (upload, data)
+
+    step = service.open_step(db, verification, VerificationStep.due_diligence)
+    step.device = _device(request)
+
+    for key, (upload, data) in uploads.items():
+        kept = _keep_file(db, verification, step, FileKind.due_diligence_document, data, upload.content_type)
+        db.flush()
+        values[key] = {
+            "file_id": str(kept.id) if kept else None,
+            "name": upload.filename,
+            "content_type": upload.content_type,
+            "byte_size": len(data),
+        }
+
+    answers = [
+        Answer(key=field.key, label=field.label, type=field.type, value=values.get(field.key))
+        for field in fields
+    ]
+    service.finish_step(
+        db,
+        step,
+        status=StepStatus.passed,
+        result={
+            "form": {
+                "id": form.public_id,
+                "name": form.name,
+                "fields": [field.model_dump(mode="json") for field in fields],
+            },
+        },
+        extracted={field.key: values.get(field.key) for field in fields},
+    )
+    service.settle(db, verification)
+    return DueDiligenceResult(form_id=form.public_id, name=form.name, status=step.status.value, answers=answers)

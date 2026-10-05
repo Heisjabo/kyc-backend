@@ -224,6 +224,9 @@ class FileKind(str, enum.Enum):
     # can put the two side by side without guessing which is which.
     document_portrait = "document_portrait"
     address_proof = "address_proof"
+    # A file the person attached to a due diligence answer: a bank statement, a
+    # portfolio summary, a letter showing where the money comes from.
+    due_diligence_document = "due_diligence_document"
     portrait = "portrait"
     challenge_video = "challenge_video"
     report_pdf = "report_pdf"
@@ -657,3 +660,54 @@ class AuditEvent(Base):
     actor: Mapped[str] = mapped_column(String, nullable=False, server_default="system")
     payload: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default=_EMPTY_OBJECT)
     created_at: Mapped[CreatedAt]
+
+
+# A due diligence form is a draft while it is being written, active while
+# clients can attach it to a verification, and archived once retired. Kept as a
+# string rather than a Postgres enum, like the console roles.
+FORM_STATUSES = ("draft", "active", "archived")
+
+
+class DueDiligenceFormClient(Base):
+    """Which clients may attach which form. A form nobody is given cannot be used."""
+
+    __tablename__ = "due_diligence_form_clients"
+
+    form_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("due_diligence_forms.id", ondelete="CASCADE"), primary_key=True
+    )
+    account_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("accounts.id", ondelete="CASCADE"), primary_key=True, index=True
+    )
+    created_at: Mapped[CreatedAt]
+
+
+class DueDiligenceForm(Base):
+    """The questions asked in the due diligence step, written in the admin console.
+
+    `public_id` is what a client sends as `form_id` when opening a verification,
+    the way Shufti's questionnaire uuid is sent. It never changes, so a client's
+    integration keeps working while the questions behind it are edited.
+
+    `fields` is the list of questions, each with a `key` that stays the same when
+    its wording changes. A submitted step keeps a copy of the questions it was
+    answered against, so editing a form never changes what an old answer meant.
+    """
+
+    __tablename__ = "due_diligence_forms"
+
+    id: Mapped[IntPk]
+    public_id: Mapped[str] = mapped_column(String(64), unique=True, nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    description: Mapped[str | None] = mapped_column(String(1000))
+    status: Mapped[str] = mapped_column(String(16), nullable=False, server_default="draft")
+    fields: Mapped[list] = mapped_column(JSONB, nullable=False, server_default=_EMPTY_LIST)
+    created_by_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("accounts.id", ondelete="SET NULL")
+    )
+    created_at: Mapped[CreatedAt]
+    updated_at: Mapped[UpdatedAt]
+
+    clients: Mapped[list["Account"]] = relationship(
+        secondary="due_diligence_form_clients", order_by="Account.id"
+    )
