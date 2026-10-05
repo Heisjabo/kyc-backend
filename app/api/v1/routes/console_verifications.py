@@ -40,6 +40,7 @@ from app.schemas.console import (
     ConsoleVerificationList,
     ConsoleVerificationSummary,
 )
+from app.reports import verification as report
 from app.services import verifications as service
 from app.storage import evidence as evidence_store
 
@@ -278,6 +279,27 @@ def read_verification(
             )
             for f in stored
         ],
+    )
+
+
+@router.get(
+    "/{verification_id}/report",
+    response_class=Response,
+    responses={200: {"content": {"application/pdf": {}}, "description": "The verification report as a PDF"}},
+)
+def read_verification_report(
+    verification_id: int,
+    _: Account = Depends(console_product("kyc")),
+    db: Session = Depends(get_session),
+) -> Response:
+    """The same PDF report a client downloads, for any verification of any client."""
+    verification = db.get(Verification, verification_id)
+    if verification is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "No such verification")
+    return Response(
+        content=report.build(db, verification),
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{report.filename(verification)}"'},
     )
 
 

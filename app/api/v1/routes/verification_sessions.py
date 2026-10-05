@@ -31,6 +31,7 @@ from app.schemas.verification import (
     StepResponse,
     VerificationResponse,
 )
+from app.reports import verification as report
 from app.services import verifications as service
 from app.storage import evidence
 
@@ -206,6 +207,35 @@ def read_verification_file(
     if data is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "That file is no longer stored")
     return Response(content=data, media_type=file.content_type)
+
+
+@router.get(
+    "/verifications/{reference}/report",
+    response_class=Response,
+    responses={
+        200: {"content": {"application/pdf": {}}, "description": "The verification report as a PDF"},
+        404: {"description": "No verification with that reference"},
+    },
+)
+def read_verification_report(
+    reference: str,
+    account: Account = Depends(account_from_api_key),
+    db: Session = Depends(get_session),
+) -> Response:
+    """The verification report, as a PDF: what Shufti calls the verification proof.
+
+    Built from what was recorded at the moment it is asked for, so it works for
+    any status: a declined or unfinished verification reads that way, with its
+    reasons and the steps nobody reached. Asking for it writes nothing.
+    """
+    verification = service.by_reference(db, account.id, reference)
+    if verification is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "No verification with that reference")
+    return Response(
+        content=report.build(db, verification),
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{report.filename(verification)}"'},
+    )
 
 
 @router.get("/verifications/{reference}/files")
