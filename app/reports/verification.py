@@ -996,10 +996,9 @@ def _device(data: ReportData) -> list:
 class _NumberedCanvas(pdfcanvas.Canvas):
     """Draws the header bar and footer on every page, with 'Page n of N'."""
 
-    def __init__(self, *args, generated: str = "", **kwargs):
+    def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._pages = []
-        self._generated = generated
 
     def showPage(self):
         self._pages.append(dict(self.__dict__))
@@ -1074,15 +1073,16 @@ class _NumberedCanvas(pdfcanvas.Canvas):
         self.setStrokeColor(BORDER)
         self.setLineWidth(0.6)
         self.line(MARGIN, 38, PAGE_WIDTH - MARGIN, 38)
-        self.setFillColor(MUTED)
-        self.setFont(FONT, 7)
-        self.drawString(MARGIN, 26, f"Generated {self._generated}")
-        self.setFillColor(BRAND_BLUE)
+        self._shield(MARGIN, 33, 14)
+        word = MARGIN + 14 + 5
         self.setFont(FONT_BOLD, 9)
-        self.drawCentredString(PAGE_WIDTH / 2, 25, PRODUCT)
+        self.setFillColor(INK)
+        self.drawString(word, 23, "Pangolin ")
+        self.setFillColor(BRAND_BLUE)
+        self.drawString(word + self.stringWidth("Pangolin ", FONT_BOLD, 9), 23, "KYC")
         self.setFillColor(MUTED)
         self.setFont(FONT, 7)
-        self.drawRightString(PAGE_WIDTH - MARGIN, 26, f"Page {self._pageNumber} of {total}")
+        self.drawRightString(PAGE_WIDTH - MARGIN, 23.5, f"Page {self._pageNumber} of {total}")
 
 
 def render(data: ReportData) -> bytes:
@@ -1114,8 +1114,7 @@ def render(data: ReportData) -> bytes:
         title=f"Verification Proof {v.reference}", author=PRODUCT,
         subject="Identity verification report", initialFontName=FONT,
     )
-    generated = _stamp(data.generated_at) + " UTC"
-    document.build(story, canvasmaker=lambda *a, **k: _NumberedCanvas(*a, generated=generated, **k))
+    document.build(story, canvasmaker=_NumberedCanvas)
     return out.getvalue()
 
 
