@@ -82,6 +82,13 @@ class Settings(BaseSettings):
     # Off by default: these are photos of people's faces.
     DEBUG_FRAMES_DIR: str = ""
 
+    # Device and network intelligence (app/services/network.py). The IP
+    # databases, the Tor exit list and the hosting ASN list are downloaded here
+    # and refreshed in the background; with the downloads off, the report shows
+    # only what the browser and the request say.
+    NETWORK_DATA_DIR: str = "var/network"
+    NETWORK_DATA_DOWNLOAD: bool = True
+
     # Pangolin AML runs after the identity checks. The token is backend-only.
     YENTE_BASE_URL: str = "https://aml.tuesday.africa"
     YENTE_API_TOKEN: str = ""

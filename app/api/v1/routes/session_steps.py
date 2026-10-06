@@ -46,9 +46,11 @@ from app.rules import face as face_rules
 from app.schemas.address import AddressCheckResponse, ProofType
 from app.schemas.document import Applicant as ApplicantDetails
 from app.schemas.document import Decision, DocumentCheckResponse, DocumentType
+from app.schemas.device import DeviceSignals
 from app.schemas.due_diligence import Answer, DueDiligenceResult, SessionForm
 from app.schemas.face import FaceVerificationResponse
 from app.services import due_diligence as forms
+from app.services import network
 from app.services import verifications as service
 from app.storage import evidence, sessions
 
@@ -159,16 +161,27 @@ def _ai_score(liveness) -> float | None:
 def _device(request: Request) -> dict:
     """What can be seen about the device from the request itself.
 
-    The richer signals (ASN, proxy, fraud score) need a lookup service that is
-    not wired up yet; this is what arrives for free, and it is enough to say the
-    document was captured on a phone and the rest happened on a laptop.
+    The richer signals (ASN, proxy, fraud score) are kept in device_sessions by
+    POST /{token}/device; this is what arrives with every step, and it is enough
+    to say the document was captured on a phone and the rest on a laptop.
     """
-    forwarded = request.headers.get("x-forwarded-for", "")
     return {
-        "ip": forwarded.split(",")[0].strip() or (request.client.host if request.client else None),
+        "ip": network.client_ip(request),
         "user_agent": request.headers.get("user-agent"),
         "language": request.headers.get("accept-language"),
     }
+
+
+@router.post("/{token}/device", status_code=status.HTTP_204_NO_CONTENT)
+def report_device(token: str, signals: DeviceSignals, request: Request, db: Session = Depends(get_session)) -> None:
+    """The browser describing itself, sent by the session page each time it opens.
+
+    Kept with the address it came from for the report's Device and Network
+    Intelligence. Accepted at any point in the session, finished or not, because
+    a person who comes back to look is still a device that reached the link.
+    """
+    verification = _open_session(db, token)
+    network.record(db, verification, request, signals)
 
 
 @router.post("/{token}/document", response_model=DocumentCheckResponse)
