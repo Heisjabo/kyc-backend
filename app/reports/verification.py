@@ -90,6 +90,10 @@ TINT = colors.HexColor("#F5F8FC")
 GREEN = colors.HexColor("#2E7D5B")
 RED = colors.HexColor("#C0392B")
 AMBER = colors.HexColor("#D98E04")
+# The header bar: a dark navy like the one on Shufti's proof, with the wordmark's
+# "KYC" in a lighter blue that still reads against it.
+HEADER = colors.HexColor("#0B1A33")
+HEADER_BLUE = colors.HexColor("#4C82FF")
 
 PAGE_WIDTH, PAGE_HEIGHT = A4
 MARGIN = 34
@@ -1009,12 +1013,61 @@ class _NumberedCanvas(pdfcanvas.Canvas):
             super().showPage()
         super().save()
 
+    def _shield(self, x: float, y: float, size: float):
+        """The Pangolin shield, the mark the admin console shows, drawn from its
+        48 by 48 SVG with (x, y) as the top left corner."""
+        k = size / 48
+
+        def path(*parts):
+            p = self.beginPath()
+            for op, *pts in parts:
+                xy = [(x + px * k, y - py * k) for px, py in zip(pts[::2], pts[1::2])]
+                if op == "M":
+                    p.moveTo(*xy[0])
+                elif op == "L":
+                    p.lineTo(*xy[0])
+                else:
+                    p.curveTo(*xy[0], *xy[1], *xy[2])
+            p.close()
+            return p
+
+        def gradient(p, start, end):
+            self.saveState()
+            self.clipPath(p, stroke=0, fill=0)
+            self.linearGradient(x, y, x + size, y - size, (start, end), extend=True)
+            self.restoreState()
+
+        def fill(p, colour, alpha=1.0):
+            self.saveState()
+            self.setFillColor(colour, alpha=alpha)
+            self.drawPath(p, stroke=0, fill=1)
+            self.restoreState()
+
+        gradient(path(("M", 24, 3), ("L", 6, 11), ("L", 6, 22), ("C", 6, 33.2, 13.7, 43.6, 24, 46),
+                      ("C", 34.3, 43.6, 42, 33.2, 42, 22), ("L", 42, 11)),
+                 colors.HexColor("#1456F5"), colors.HexColor("#0B37B8"))
+        gradient(path(("M", 24, 10), ("C", 18, 10, 13, 14.5, 12, 20.5), ("C", 14.8, 20, 18.2, 20.5, 21, 22.5),
+                      ("C", 22, 17, 24, 12, 24, 10)),
+                 colors.HexColor("#38BDF8"), colors.HexColor("#1456F5"))
+        fill(path(("M", 24, 10), ("C", 30, 10, 35, 14.5, 36, 20.5), ("C", 33.2, 20, 29.8, 20.5, 27, 22.5),
+                  ("C", 26, 17, 24, 12, 24, 10)), colors.white, 0.25)
+        fill(path(("M", 24, 14), ("C", 20.5, 17.5, 18, 22, 18, 27), ("C", 21, 28.5, 24, 31, 24, 35),
+                  ("C", 24, 31, 27, 28.5, 30, 27), ("C", 30, 22, 27.5, 17.5, 24, 14)), colors.white, 0.95)
+        fill(path(("M", 24, 20), ("L", 21, 25.5), ("L", 27, 25.5)), BRAND_BLUE)
+        fill(path(("M", 20, 30), ("C", 22.5, 31.5, 25.5, 31.5, 28, 30), ("C", 26.5, 33, 24, 36, 24, 36),
+                  ("C", 24, 36, 21.5, 33, 20, 30)), colors.HexColor("#38BDF8"))
+
     def _decorate(self, total: int):
-        self.setFillColor(BRAND_BLUE)
+        self.setFillColor(HEADER)
         self.rect(0, PAGE_HEIGHT - 48, PAGE_WIDTH, 48, stroke=0, fill=1)
-        self.setFillColor(colors.white)
+        self._shield(MARGIN, PAGE_HEIGHT - 11, 26)
+        word = MARGIN + 26 + 8
         self.setFont(FONT_BOLD, 15)
-        self.drawString(MARGIN, PAGE_HEIGHT - 29, PRODUCT)
+        self.setFillColor(colors.white)
+        self.drawString(word, PAGE_HEIGHT - 29, "Pangolin ")
+        self.setFillColor(HEADER_BLUE)
+        self.drawString(word + self.stringWidth("Pangolin ", FONT_BOLD, 15), PAGE_HEIGHT - 29, "KYC")
+        self.setFillColor(colors.white)
         self.setFont(FONT_MEDIUM, 8)
         self.drawRightString(PAGE_WIDTH - MARGIN, PAGE_HEIGHT - 28, "Verification Proof")
 
