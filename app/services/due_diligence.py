@@ -23,7 +23,8 @@ from app.schemas.due_diligence import FormField
 
 # Shufti's limit for a file in a questionnaire, which the session page states.
 MAX_FILE_BYTES = 15 * 1024 * 1024
-ALLOWED_FILE_TYPES = {"image/jpeg", "image/png", "image/webp", "application/pdf"}
+# PDF only: no screenshots or pictures of a statement.
+ALLOWED_FILE_TYPES = {"application/pdf"}
 MAX_TEXT = 2000
 
 _ID_ALPHABET = string.ascii_letters + string.digits

@@ -34,6 +34,7 @@ from app.db.models import (
 from app.db.session import get_session
 from app.engines.face import detect_faces, portrait
 from app.engines.image import InvalidImageError, decode_image
+from app.engines import pdf
 from app.engines import recognition
 from app.engines.recognition import embed, pass_threshold, similarity
 from app.pipeline.address import scan_address_proof
@@ -113,19 +114,67 @@ def _read(upload: UploadFile, field: str) -> bytes:
     return data
 
 
-def _read_proof(upload: UploadFile, field: str) -> bytes:
-    """The same as _read, plus PDFs: most bank statements only exist as one."""
-    if upload.content_type not in address_rules.ALLOWED_CONTENT_TYPES:
-        raise HTTPException(
-            status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
-            f"{field} must be one of: {', '.join(sorted(address_rules.ALLOWED_CONTENT_TYPES))}",
-        )
+def _read_pdf(upload: UploadFile, field: str) -> bytes:
+    """An uploaded document, which has to be a PDF, by its content type and by
+    what is actually in it."""
+    if upload.content_type != document_rules.UPLOAD_CONTENT_TYPE:
+        raise HTTPException(status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, f"{field} must be a PDF")
     data = upload.file.read(document_rules.MAX_UPLOAD_BYTES + 1)
     if len(data) > document_rules.MAX_UPLOAD_BYTES:
         raise HTTPException(status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, f"{field} is larger than 10 MB")
     if not data:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, f"{field} is empty")
+    if not pdf.is_pdf(data):
+        raise HTTPException(status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, f"{field} must be a PDF")
     return data
+
+
+def _read_proof(upload: UploadFile, field: str) -> bytes:
+    """A proof of address, which has to be a PDF."""
+    if upload.content_type not in address_rules.ALLOWED_CONTENT_TYPES:
+        raise HTTPException(status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, f"{field} must be a PDF")
+    return _read_pdf(upload, field)
+
+
+def _pdf_pages(data: bytes, field: str) -> list[bytes]:
+    """An uploaded identity document's pages as JPEGs, which is what the document
+    check reads and what the report and the console show."""
+    import cv2
+
+    try:
+        pages = pdf.render_pages(data, max_pages=document_rules.PDF_MAX_PAGES)
+    except Exception:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, f"{field} could not be opened as a PDF")
+    images = []
+    for page in pages:
+        ok, buffer = cv2.imencode(".jpg", page, [cv2.IMWRITE_JPEG_QUALITY, 92])
+        if ok:
+            images.append(buffer.tobytes())
+    if not images:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, f"{field} has no pages")
+    return images
+
+
+def _read_document(front: UploadFile, back: UploadFile | None,
+                   document_type: DocumentType) -> tuple[bytes, str, bytes | None, str | None]:
+    """The front and back of an identity document, and their content types.
+
+    A photo from the session page's camera arrives as an image and is read as it
+    is. An upload has to be a PDF: its first page is the front and, for a
+    document with two sides, its second page is the back when no back was sent.
+    """
+    if front.content_type == document_rules.UPLOAD_CONTENT_TYPE:
+        pages = _pdf_pages(_read_pdf(front, "front"), "front")
+        front_bytes, front_type = pages[0], "image/jpeg"
+        if back is None and len(pages) > 1 and document_type != DocumentType.passport:
+            return front_bytes, front_type, pages[1], "image/jpeg"
+    else:
+        front_bytes, front_type = _read(front, "front"), front.content_type
+    if back is None:
+        return front_bytes, front_type, None, None
+    if back.content_type == document_rules.UPLOAD_CONTENT_TYPE:
+        return front_bytes, front_type, _pdf_pages(_read_pdf(back, "back"), "back")[0], "image/jpeg"
+    return front_bytes, front_type, _read(back, "back"), back.content_type
 
 
 def _keep_file(db: Session, verification: Verification, step: Step, kind: FileKind,
@@ -203,8 +252,7 @@ def submit_document(
     verification = _open_session(db, token)
     _require_turn(verification, VerificationStep.document)
 
-    front_bytes = _read(front, "front")
-    back_bytes = _read(back, "back") if back else None
+    front_bytes, front_type, back_bytes, back_type = _read_document(front, back, document_type)
     claimed = verification.claimed or {}
 
     step = service.open_step(db, verification, VerificationStep.document)
@@ -226,9 +274,9 @@ def submit_document(
     extracted = result.extracted.model_dump(mode="json") if result.extracted else {}
     extracted["document_type"] = document_type.value
 
-    _keep_file(db, verification, step, FileKind.document_front, front_bytes, front.content_type)
+    _keep_file(db, verification, step, FileKind.document_front, front_bytes, front_type)
     if back_bytes:
-        _keep_file(db, verification, step, FileKind.document_back, back_bytes, back.content_type)
+        _keep_file(db, verification, step, FileKind.document_back, back_bytes, back_type)
 
     # The portrait on the document is what the face step will compare against,
     # so it is cut and kept now, while the image is in hand.
@@ -707,7 +755,7 @@ async def submit_due_diligence(token: str, request: Request, db: Session = Depen
             values[field.key] = None
             continue
         if upload.content_type not in forms.ALLOWED_FILE_TYPES:
-            refuse(field.key, f"{field.label}: upload an image or a PDF")
+            refuse(field.key, f"{field.label}: upload a PDF")
         data = await upload.read(forms.MAX_FILE_BYTES + 1)
         if len(data) > forms.MAX_FILE_BYTES:
             refuse(field.key, f"{field.label}: the file is larger than {forms.MAX_FILE_BYTES // (1024 * 1024)} MB")
@@ -716,6 +764,8 @@ async def submit_due_diligence(token: str, request: Request, db: Session = Depen
                 refuse(field.key, f"{field.label}: the file is empty")
             values[field.key] = None
             continue
+        if not pdf.is_pdf(data):
+            refuse(field.key, f"{field.label}: upload a PDF")
         uploads[field.key] = (upload, data)
 
     step = service.open_step(db, verification, VerificationStep.due_diligence)
