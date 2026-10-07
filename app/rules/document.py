@@ -19,6 +19,11 @@ NAME_TOKEN_MATCH_SCORE = 85
 # Uploads
 MAX_UPLOAD_BYTES = 10 * 1024 * 1024
 ALLOWED_CONTENT_TYPES = {"image/jpeg", "image/png", "image/webp"}
+# A document the person uploads on the session page, rather than photographs with
+# the camera there, has to be a PDF: no screenshots or pictures from the gallery.
+# Its first page is read as the front and its second, if there is one, as the back.
+UPLOAD_CONTENT_TYPE = "application/pdf"
+PDF_MAX_PAGES = 2
 
 # Guiding a live document capture (pipeline/document_probe.py)
 #

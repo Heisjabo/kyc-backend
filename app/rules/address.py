@@ -31,9 +31,9 @@ TYPE_WORDS = {
     ),
 }
 
-# Uploads. A PDF is accepted because most bank statements only exist as one, and
-# it is the one proof type nobody photographs.
-ALLOWED_CONTENT_TYPES = {"image/jpeg", "image/png", "image/webp", "application/pdf"}
+# Uploads. Only a PDF: a screenshot or a photo of a bill is the easiest kind of
+# proof to alter, and the statement or bill itself is almost always a PDF.
+ALLOWED_CONTENT_TYPES = {"application/pdf"}
 
 # How many pages of a PDF are read. A statement's address is on the first page;
 # this is enough for a covering page in front of it without reading somebody's

@@ -114,7 +114,12 @@ def scanned_pdf(*lines: str) -> bytes:
     Built by drawing the page and letting PIL save it as a PDF, which is exactly
     what a phone scanner app produces.
     """
-    image = cv2.imdecode(np.frombuffer(bill(*lines), np.uint8), cv2.IMREAD_COLOR)
+    return as_pdf(bill(*lines))
+
+
+def as_pdf(picture: bytes) -> bytes:
+    """A picture saved as a one-page PDF, the only kind of upload the session page sends."""
+    image = cv2.imdecode(np.frombuffer(picture, np.uint8), cv2.IMREAD_COLOR)
     out = io.BytesIO()
     Image.fromarray(image[:, :, ::-1]).save(out, format="PDF")
     return out.getvalue()
@@ -534,7 +539,7 @@ def submit_address(client, token, proof=None, proof_type="utility_bill"):
     return client.post(
         f"/v1/sessions/{token}/address",
         data={"document_type": proof_type},
-        files={"proof": ("bill.jpg", proof or utility_bill(), "image/jpeg")},
+        files={"proof": ("bill.pdf", as_pdf(proof or utility_bill()), "application/pdf")},
     )
 
 
@@ -596,7 +601,7 @@ def test_the_address_comes_from_the_verification_not_the_request(client, api_key
     response = client.post(
         f"/v1/sessions/{token}/address",
         data={"document_type": "utility_bill", "full_address": "Nairobi, Kenya"},
-        files={"proof": ("bill.jpg", utility_bill(place="NAIROBI"), "image/jpeg")},
+        files={"proof": ("bill.pdf", as_pdf(utility_bill(place="NAIROBI")), "application/pdf")},
     )
     body = response.json()
     assert body["extracted"]["full_address"] == "KG 586 St, Kigali City"
@@ -637,7 +642,7 @@ def test_a_pdf_is_accepted_and_kept_as_a_pdf(client, api_key, monkeypatch, db_se
 
 
 @needs_db
-def test_a_file_that_is_neither_an_image_nor_a_pdf_is_refused(client, api_key, monkeypatch):
+def test_a_file_that_is_not_a_pdf_is_refused(client, api_key, monkeypatch):
     opened, token = pass_document(client, api_key, monkeypatch)
     response = client.post(
         f"/v1/sessions/{token}/address",
@@ -646,7 +651,7 @@ def test_a_file_that_is_neither_an_image_nor_a_pdf_is_refused(client, api_key, m
                          "application/vnd.openxmlformats-officedocument.wordprocessingml.document")},
     )
     assert response.status_code == 415
-    assert "application/pdf" in response.text
+    assert "must be a PDF" in response.text
 
 
 @needs_db
