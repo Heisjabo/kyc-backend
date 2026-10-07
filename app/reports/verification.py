@@ -523,7 +523,7 @@ def _pairs(pairs: list[tuple[str, object]], columns=2, label_width=None) -> Tabl
     label_width = label_width or min(105, each * 0.42)
     cells = []
     for label, value in pairs:
-        cells += [_p(label, _SMALL), _p(value, _BOLD)]
+        cells += [_p(label, _SMALL), _p(value)]
     rows = [cells[i:i + columns * 2] for i in range(0, len(cells), columns * 2)] or [["", ""]]
     for row in rows:
         row.extend([""] * (columns * 2 - len(row)))
@@ -953,8 +953,10 @@ def _face_match(data: ReportData) -> list:
 def _device(data: ReportData) -> list:
     """Shufti's Device and Network Intelligence, field for field and in its order.
 
-    The lookup behind most of these is not wired up yet, so they read N/A until
-    a device_sessions row carries them.
+    Read from the newest device_sessions row, which app/services/network.py
+    writes when the session page reports its browser. A verification from
+    before that, or one whose page never reported, shows the IP and user agent
+    its steps recorded and N/A for the rest.
     """
     d = data.device
     first = _first_device(data)
@@ -968,23 +970,29 @@ def _device(data: ReportData) -> list:
     def column(name):
         return getattr(d, name) if d else None
 
+    def level(value):
+        if not value:
+            return None
+        return "VPN" if value == "vpn" else value.title()
+
     pairs = [
         ("IP", column("ip") or first.get("ip")), ("Continent Name", signals.get("continent")),
-        ("Country Name", column("country")), ("City", column("city")),
+        ("Country Name", signals.get("country_name") or (_country(column("country")) if column("country") else None)), ("City", column("city")),
         ("Latitude", column("latitude")), ("Longitude", column("longitude")),
         ("ASN", column("asn")), ("ASN Name", column("asn_name")),
         ("IP Timezone", column("timezone")), ("Fingerprint", column("fingerprint")),
         ("Browser Timezone", signals.get("browser_timezone")), ("OS Name", system),
         ("User Agent", user_agent), ("Tor Usage Detected", flag(column("is_tor"))),
-        ("Is Proxy", flag(column("is_proxy"))), ("Threat Level", column("threat_level")),
-        ("IP Routing Type", signals.get("ip_routing_type")), ("Data Center Detected", flag(column("is_datacenter"))),
+        ("Is Proxy", flag(column("is_proxy"))), ("Threat Level", level(column("threat_level"))),
+        ("IP Routing Type", level(signals.get("ip_routing_type"))), ("Data Center Detected", flag(column("is_datacenter"))),
         ("Country Mismatch", flag(column("country_mismatch"))),
         ("IP Timezone Mismatch", flag(column("timezone_mismatch"))),
         ("Frequent IP Changes", flag(signals.get("frequent_ip_changes"))),
         ("Stable IP Detected", flag(signals.get("stable_ip"))),
-        ("Jailbroken Or Rooted Device", flag(column("rooted_device"))),
+        # A web page cannot see this, so it is not claimed either way.
+        ("Jailbroken Or Rooted Device", flag(column("rooted_device")) or ("Not detectable in a browser" if d else None)),
         ("Emulated Device Detected", flag(column("emulated_device"))),
-        ("Risk Level", column("risk_level")), ("Summary", signals.get("summary")),
+        ("Risk Level", level(column("risk_level"))), ("Summary", signals.get("summary")),
         ("Fraud Score", column("fraud_score")),
     ]
     return [_card([_pairs(pairs)], "Device and Network Intelligence")]

@@ -33,6 +33,12 @@ pyjwt==2.*
 # EmailStr validation in the auth schemas.
 email-validator==2.*
 
+# Device and network intelligence (app/services/network.py): DB-IP's databases
+# are MaxMind-format files, and tzdata's zone table maps an address to its
+# timezone without a geolocation service.
+maxminddb==2.*
+tzdata
+
 # Document check
 opencv-python==5.*
 pillow==12.*
