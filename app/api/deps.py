@@ -15,11 +15,12 @@ All three end at an Account, so anything they reach can be written the same way.
 
 from datetime import UTC, datetime
 
-from fastapi import Depends, Header, HTTPException, status
+from fastapi import Depends, Header, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.api.request_audit import set_actor
 from app.core import security
 from app.db.models import Account, ApiKey
 from app.db.session import get_session
@@ -29,6 +30,7 @@ _API_KEY_HEADER = "X-API-Key"
 
 
 def current_account(
+    request: Request,
     credentials: HTTPAuthorizationCredentials | None = Depends(_bearer),
     db: Session = Depends(get_session),
 ) -> Account:
@@ -50,10 +52,12 @@ def current_account(
     account = db.get(Account, _as_id(claims.get("sub")))
     if account is None or not account.is_active:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "That account is no longer active")
+    set_actor(request, account.id, "dashboard")
     return account
 
 
 def current_console_account(
+    request: Request,
     credentials: HTTPAuthorizationCredentials | None = Depends(_bearer),
     db: Session = Depends(get_session),
 ) -> Account:
@@ -79,6 +83,7 @@ def current_console_account(
     account = db.get(Account, _as_id(claims.get("sub")))
     if account is None or not account.is_active or not account.console_role:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "This account cannot use the admin console")
+    set_actor(request, account.id, "console")
     return account
 
 
@@ -107,6 +112,7 @@ def console_role(product: str, roles: tuple[str, ...]):
 
 
 def account_from_api_key(
+    request: Request,
     x_api_key: str | None = Header(default=None, alias=_API_KEY_HEADER),
     db: Session = Depends(get_session),
 ) -> Account:
@@ -145,6 +151,7 @@ def account_from_api_key(
     # a timestamp on a row the caller already proved they hold: no extra risk.
     key.last_used_at = now
     db.commit()
+    set_actor(request, account.id, "api_key", api_key=key.prefix)
     return account
 
 
