@@ -275,3 +275,137 @@ class ConsoleApplicantDetail(ConsoleApplicantSummary):
     date_of_birth: date | None
     # Every verification, newest first.
     history: list[ConsoleVerificationSummary]
+
+
+# AML screening, as staff see it: searches run by hand from the console, and
+# the screenings the AML step ran on real verifications.
+
+class ConsoleAmlSearchRequest(BaseModel):
+    """A person to look up on the watchlists. Only the name is required; a date
+    of birth, nationality or ID number sharpen the match."""
+
+    full_name: str = Field(min_length=2, max_length=250)
+    date_of_birth: date | None = None
+    nationality: str | None = Field(default=None, min_length=2, max_length=3)
+    id_number: str | None = Field(default=None, max_length=100)
+    # Why the search was run, kept in the audit log with it.
+    reason: str | None = Field(default=None, max_length=500)
+
+
+class ConsoleAmlCandidate(BaseModel):
+    """One listed entity the screening matched, flattened from yente's answer."""
+
+    id: str
+    name: str
+    entity_type: str
+    score: float
+    # FollowTheMoney topics, such as sanction, role.pep, crime or poi.
+    topics: list[str]
+    datasets: list[str]
+    aliases: list[str]
+    birth_dates: list[str]
+    nationalities: list[str]
+    countries: list[str]
+    positions: list[str]
+    first_seen: str | None
+    last_seen: str | None
+
+
+class ConsoleAmlResult(BaseModel):
+    # no_match, possible_match, strong_match or unavailable
+    outcome: str
+    action: str
+    highest_score: float | None
+    dataset: str
+    screened_at: str
+    error: str | None
+    candidates: list[ConsoleAmlCandidate]
+
+
+class ConsoleAmlQuery(BaseModel):
+    full_name: str
+    date_of_birth: str | None
+    nationality: str | None
+    id_number: str | None
+
+
+class ConsoleAmlSearchResponse(BaseModel):
+    """A search run from the console. `id` is the audit event that records it."""
+
+    id: str
+    query: ConsoleAmlQuery
+    reason: str | None
+    result: ConsoleAmlResult
+    by: str
+    at: datetime
+
+
+class ConsoleAmlSearchRow(BaseModel):
+    """A past console search, from the audit log."""
+
+    id: str
+    query: ConsoleAmlQuery
+    reason: str | None
+    outcome: str
+    highest_score: float | None
+    match_count: int
+    # The best few candidates, by name and score, as they were at the time.
+    top_matches: list[dict]
+    by: str
+    at: datetime
+
+
+class ConsoleAmlSearchList(BaseModel):
+    items: list[ConsoleAmlSearchRow]
+    total: int
+    page: int
+    page_size: int
+
+
+class ConsoleAmlScreening(BaseModel):
+    """The AML step of one verification, with who was screened and what came back."""
+
+    verification_id: str
+    reference: str
+    verification_status: str
+    # passed (no match, or screening unavailable) or review (a possible or strong match)
+    step_status: str
+    attempt: int
+    client: ConsoleClient
+    applicant: ConsoleApplicant
+    # The identity screened, as read from the document.
+    screened: ConsoleAmlQuery | None
+    result: ConsoleAmlResult
+
+
+class ConsoleAmlScreeningList(BaseModel):
+    items: list[ConsoleAmlScreening]
+    total: int
+    page: int
+    page_size: int
+    # How many match the other filters, for each outcome.
+    outcome_counts: dict[str, int]
+
+
+# The audit log: what staff did in the console, and when.
+
+class ConsoleAuditEvent(BaseModel):
+    id: str
+    event_type: str
+    # "system", or the console account that did it.
+    actor: str
+    actor_name: str | None
+    actor_email: str | None
+    verification_id: str | None
+    payload: dict
+    created_at: datetime
+
+
+class ConsoleAuditEventList(BaseModel):
+    items: list[ConsoleAuditEvent]
+    total: int
+    page: int
+    page_size: int
+    # How many match the other filters, for each category (the part of the
+    # event type before the dot: aml, api_key, console, due_diligence_form).
+    category_counts: dict[str, int]
