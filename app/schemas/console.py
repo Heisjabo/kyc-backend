@@ -340,51 +340,53 @@ class ConsoleAmlSearchResponse(BaseModel):
     at: datetime
 
 
-class ConsoleAmlSearchRow(BaseModel):
-    """A past console search, from the audit log."""
+class ConsoleAmlTopMatch(BaseModel):
+    name: str
+    score: float
+    topics: list[str] = Field(default_factory=list)
+
+
+class ConsoleAmlVerificationRef(BaseModel):
+    id: str
+    reference: str
+    status: str
+    client: ConsoleClient
+
+
+class ConsoleAmlEntry(BaseModel):
+    """One AML result in the console's list: a search run from the console, or
+    the AML step of a verification. `id` is "search:<audit event id>" or
+    "verification:<verification id>"."""
 
     id: str
-    query: ConsoleAmlQuery
-    reason: str | None
+    source: str  # manual or verification
+    at: datetime
+    # Who was screened: what was typed for a search, what the document read for a verification.
+    person: ConsoleAmlQuery
     outcome: str
     highest_score: float | None
     match_count: int
-    # The best few candidates, by name and score, as they were at the time.
-    top_matches: list[dict]
-    by: str
-    at: datetime
+    top_match: ConsoleAmlTopMatch | None
+    # A search: who ran it and why.
+    by: str | None = None
+    reason: str | None = None
+    # A verification: which one, its status and client.
+    verification: ConsoleAmlVerificationRef | None = None
+    # Every match. Missing for searches run before full results were kept.
+    result: ConsoleAmlResult | None
 
 
-class ConsoleAmlSearchList(BaseModel):
-    items: list[ConsoleAmlSearchRow]
+class ConsoleAmlEntryList(BaseModel):
+    items: list[ConsoleAmlEntry]
     total: int
     page: int
     page_size: int
-
-
-class ConsoleAmlScreening(BaseModel):
-    """The AML step of one verification, with who was screened and what came back."""
-
-    verification_id: str
-    reference: str
-    verification_status: str
-    # passed (no match, or screening unavailable) or review (a possible or strong match)
-    step_status: str
-    attempt: int
-    client: ConsoleClient
-    applicant: ConsoleApplicant
-    # The identity screened, as read from the document.
-    screened: ConsoleAmlQuery | None
-    result: ConsoleAmlResult
-
-
-class ConsoleAmlScreeningList(BaseModel):
-    items: list[ConsoleAmlScreening]
-    total: int
-    page: int
-    page_size: int
-    # How many match the other filters, for each outcome.
+    # Under the source and text filters, but not the outcome one.
     outcome_counts: dict[str, int]
+    # Under the outcome and text filters, but not the source one.
+    source_counts: dict[str, int]
+    # The scores at which a match becomes possible and strong.
+    thresholds: dict[str, float]
 
 
 # The audit log: what staff did in the console, and when.

@@ -1,20 +1,17 @@
 """AML screening for Pangolin staff in the admin console.
 
-Two things live here:
-
-- **Searches.** Staff look a person up on the watchlists by hand, by name and
+- **Searching.** Staff look a person up on the watchlists by hand, by name and
   optionally date of birth, nationality and ID number. It is the same yente
   query the AML step runs, and each search is recorded in audit_events
-  (event type aml.search) with who ran it, from where, why, and what came back.
-  The list of past searches is read from there.
-- **Screenings.** What the AML step found on real verifications: the latest
-  attempt of each verification's AML step that has a result, newest first.
+  (event type aml.search) with who ran it, from where, why, and the whole
+  answer, so it can be opened again later.
+- **The list.** One list of every console search and every verification whose
+  AML step found something or could not screen, newest first. Verifications
+  that came back with no match are left out: there is nothing to look at.
 
 Searching is an action on a person, so readonly and support staff may not run
-one; anyone with Pangolin KYC may read the screenings and past searches.
+one; anyone with Pangolin KYC may read the list.
 """
-
-from datetime import date, datetime, time, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy import and_, func, or_, select
@@ -22,18 +19,19 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.api.deps import console_product, console_role
 from app.api.v1.routes.console_verifications import _applicant, _client, _effective, _latest_scans
+from app.core.config import settings
 from app.db.models import Account, Applicant, AuditEvent, Step, Verification, VerificationStep
 from app.db.session import get_session
 from app.schemas.console import (
     ConsoleAmlCandidate,
+    ConsoleAmlEntry,
+    ConsoleAmlEntryList,
     ConsoleAmlQuery,
     ConsoleAmlResult,
-    ConsoleAmlScreening,
-    ConsoleAmlScreeningList,
-    ConsoleAmlSearchList,
     ConsoleAmlSearchRequest,
     ConsoleAmlSearchResponse,
-    ConsoleAmlSearchRow,
+    ConsoleAmlTopMatch,
+    ConsoleAmlVerificationRef,
 )
 from app.screening.yente import Identity, ScreeningResult, screen
 from app.services.network import client_ip
@@ -145,6 +143,8 @@ def search(
             ],
             "dataset": result.dataset,
             "error": result.error,
+            # The whole answer, so the search can be opened again as it was.
+            "result": result.model_dump(),
             "by": staff.email,
             "ip": client_ip(request),
         },
@@ -157,92 +157,109 @@ def search(
     )
 
 
-def _day_start(day: date) -> datetime:
-    return datetime.combine(day, time.min, tzinfo=timezone.utc)
+def _top(candidates: list[ConsoleAmlCandidate], stored: list[dict]) -> ConsoleAmlTopMatch | None:
+    if candidates:
+        best = candidates[0]
+        return ConsoleAmlTopMatch(name=best.name, score=best.score, topics=best.topics)
+    if stored and isinstance(stored[0], dict) and stored[0].get("name"):
+        return ConsoleAmlTopMatch(name=stored[0]["name"], score=float(stored[0].get("score") or 0), topics=stored[0].get("topics") or [])
+    return None
 
 
-@router.get("/searches", response_model=ConsoleAmlSearchList)
-def list_searches(
-    q: str | None = Query(default=None, max_length=120, description="Name searched for"),
-    page: int = Query(default=1, ge=1),
-    page_size: int = Query(default=25, ge=1, le=100),
-    _: Account = Depends(console_product("kyc")),
-    db: Session = Depends(get_session),
-) -> ConsoleAmlSearchList:
-    """Searches run from the console, newest first."""
-    filters = [AuditEvent.event_type == SEARCH_EVENT]
-    if q and q.strip():
-        filters.append(AuditEvent.payload["query"]["full_name"].astext.ilike(f"%{q.strip()}%"))
-    listed = select(AuditEvent).where(*filters)
-    total = db.scalar(select(func.count()).select_from(listed.subquery())) or 0
-    events = db.scalars(
-        listed.order_by(AuditEvent.created_at.desc(), AuditEvent.id.desc()).offset((page - 1) * page_size).limit(page_size)
-    ).all()
-
-    staff_ids = {int(e.actor) for e in events if e.actor.isdigit()}
-    staff = {a.id: a for a in db.scalars(select(Account).where(Account.id.in_(staff_ids)))} if staff_ids else {}
-
-    def by(event: AuditEvent) -> str:
-        account = staff.get(int(event.actor)) if event.actor.isdigit() else None
-        return _staff_name(account) if account else event.payload.get("by") or event.actor
-
-    return ConsoleAmlSearchList(
-        items=[
-            ConsoleAmlSearchRow(
-                id=str(e.id),
-                query=_query(e.payload.get("query") or {}),
-                reason=e.payload.get("reason"),
-                outcome=e.payload.get("outcome") or "unavailable",
-                highest_score=e.payload.get("highest_score"),
-                match_count=int(e.payload.get("match_count") or 0),
-                top_matches=e.payload.get("top_matches") or [],
-                by=by(e),
-                at=e.created_at,
-            )
-            for e in events
-        ],
-        total=total,
-        page=page,
-        page_size=page_size,
+def _search_entry(event: AuditEvent, staff: dict[int, Account]) -> ConsoleAmlEntry:
+    payload = event.payload
+    account = staff.get(int(event.actor)) if event.actor.isdigit() else None
+    result = _result(payload["result"]) if isinstance(payload.get("result"), dict) else None
+    return ConsoleAmlEntry(
+        id=f"search:{event.id}",
+        source="manual",
+        at=event.created_at,
+        person=_query(payload.get("query") or {}),
+        outcome=payload.get("outcome") or "unavailable",
+        highest_score=payload.get("highest_score"),
+        match_count=int(payload.get("match_count") or 0),
+        top_match=_top(result.candidates if result else [], payload.get("top_matches") or []),
+        by=_staff_name(account) if account else payload.get("by") or event.actor,
+        reason=payload.get("reason"),
+        result=result,
     )
 
 
-@router.get("/screenings", response_model=ConsoleAmlScreeningList)
-def list_screenings(
+def _verification_entry(step: Step, document: Step | None, scan) -> ConsoleAmlEntry:
+    verification = step.verification
+    result = _result(step.result)
+    fields = (document.extracted or {}) if document else {}
+    name = fields.get("full_name") or " ".join(filter(None, [fields.get("given_names"), fields.get("surname")]))
+    applicant = _applicant(verification, scan)
+    return ConsoleAmlEntry(
+        id=f"verification:{verification.id}",
+        source="verification",
+        at=step.completed_at or step.created_at,
+        person=ConsoleAmlQuery(
+            full_name=name or applicant.name or "Unnamed applicant",
+            date_of_birth=fields.get("date_of_birth"),
+            nationality=fields.get("nationality"),
+            id_number=None,
+        ),
+        outcome=result.outcome,
+        highest_score=result.highest_score,
+        match_count=len(result.candidates),
+        top_match=_top(result.candidates, []),
+        verification=ConsoleAmlVerificationRef(
+            id=str(verification.id),
+            reference=verification.reference,
+            status=_effective(verification),
+            client=_client(verification.account),
+        ),
+        result=result,
+    )
+
+
+SOURCES = ("manual", "verification")
+
+
+@router.get("/results", response_model=ConsoleAmlEntryList)
+def list_results(
+    source: str | None = Query(default=None, description="manual or verification"),
     outcome: str | None = Query(default=None, description="One of " + ", ".join(OUTCOMES)),
-    client_id: int | None = Query(default=None, description="Only this client account's verifications"),
-    q: str | None = Query(default=None, max_length=120, description="Reference, applicant name, email or customer id"),
-    screened_from: date | None = Query(default=None, description="Screened on or after this day (UTC)"),
-    screened_to: date | None = Query(default=None, description="Screened on or before this day (UTC)"),
+    q: str | None = Query(default=None, max_length=120, description="Name, reference, email or the staff member who searched"),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=25, ge=1, le=100),
     _: Account = Depends(console_product("kyc")),
     db: Session = Depends(get_session),
-) -> ConsoleAmlScreeningList:
-    """What the AML step found on real verifications: the latest screened attempt
-    of each, newest first."""
+) -> ConsoleAmlEntryList:
+    """Console searches and verification screenings that found something or could
+    not screen, newest first, in one list."""
+    if source is not None and source not in SOURCES:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Source must be manual or verification")
     if outcome is not None and outcome not in OUTCOMES:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Outcome must be one of " + ", ".join(OUTCOMES))
+    like = f"%{q.strip()}%" if q and q.strip() else None
 
+    # Searches run from the console, every outcome.
+    search_outcome = AuditEvent.payload["outcome"].astext
+    search_filters = [AuditEvent.event_type == SEARCH_EVENT]
+    if like:
+        search_filters.append(
+            or_(
+                AuditEvent.payload["query"]["full_name"].astext.ilike(like),
+                AuditEvent.payload["by"].astext.ilike(like),
+                AuditEvent.payload["reason"].astext.ilike(like),
+            )
+        )
+
+    # Each verification's latest screened AML attempt, unless it found nobody.
     latest = (
         select(Step.verification_id, func.max(Step.attempt).label("attempt"))
         .where(Step.step == VerificationStep.aml, Step.result.has_key("outcome"))
         .group_by(Step.verification_id)
         .subquery()
     )
-    outcome_of = Step.result["outcome"].astext
-    screened_at = func.coalesce(Step.completed_at, Step.created_at)
-
-    filters = []
-    if client_id is not None:
-        filters.append(Verification.account_id == client_id)
-    if screened_from is not None:
-        filters.append(screened_at >= _day_start(screened_from))
-    if screened_to is not None:
-        filters.append(screened_at < _day_start(screened_to + timedelta(days=1)))
-    if q and q.strip():
-        like = f"%{q.strip()}%"
-        filters.append(
+    step_outcome = Step.result["outcome"].astext
+    step_at = func.coalesce(Step.completed_at, Step.created_at)
+    step_filters = [step_outcome != "no_match"]
+    if like:
+        step_filters.append(
             or_(
                 Verification.reference.ilike(like),
                 Applicant.customer_id.ilike(like),
@@ -253,8 +270,7 @@ def list_screenings(
             )
         )
 
-    def joined(columns):
-        """Each verification's latest screened AML attempt, under the filters."""
+    def screened(columns):
         return (
             columns.join(
                 latest,
@@ -266,66 +282,67 @@ def list_screenings(
             )
             .join(Verification, Verification.id == Step.verification_id)
             .outerjoin(Applicant, Verification.applicant_id == Applicant.id)
-            .where(*filters)
+            .where(*step_filters)
         )
 
-    base = joined(select(Step))
-    # Counts per outcome under every filter but the outcome itself.
-    counted = db.execute(joined(select(outcome_of.label("o"), func.count()).select_from(Step)).group_by("o")).all()
-    outcome_counts = {o: 0 for o in OUTCOMES} | {row[0]: row[1] for row in counted if row[0]}
+    def counts(rows) -> dict[str, int]:
+        return {row[0]: row[1] for row in rows if row[0]}
 
-    listed = base.where(outcome_of == outcome) if outcome else base
-    total = db.scalar(select(func.count()).select_from(listed.subquery())) or 0
-    steps = db.scalars(
-        listed.options(
-            selectinload(Step.verification).selectinload(Verification.applicant),
-            selectinload(Step.verification).selectinload(Verification.account),
-        )
-        .order_by(screened_at.desc(), Step.id.desc())
-        .offset((page - 1) * page_size)
-        .limit(page_size)
-    ).all()
+    search_by_outcome = counts(
+        db.execute(select(search_outcome.label("o"), func.count()).where(*search_filters).group_by("o")).all()
+    )
+    step_by_outcome = counts(
+        db.execute(screened(select(step_outcome.label("o"), func.count()).select_from(Step)).group_by("o")).all()
+    )
+    use_searches, use_steps = source in (None, "manual"), source in (None, "verification")
+    outcome_counts = {
+        o: (search_by_outcome.get(o, 0) if use_searches else 0) + (step_by_outcome.get(o, 0) if use_steps else 0)
+        for o in OUTCOMES
+    }
+    picked = (lambda by: sum(by.values())) if outcome is None else (lambda by: by.get(outcome, 0))
+    source_counts = {"manual": picked(search_by_outcome), "verification": picked(step_by_outcome)}
+    total = (source_counts["manual"] if use_searches else 0) + (source_counts["verification"] if use_steps else 0)
 
-    ids = [s.verification_id for s in steps]
-    scans = _latest_scans(db, ids)
-    # The identity that was screened is what the document step read.
-    documents: dict[int, Step] = {}
-    if ids:
-        for doc in db.scalars(
-            select(Step).where(Step.step == VerificationStep.document, Step.verification_id.in_(ids)).order_by(Step.attempt)
-        ):
-            documents[doc.verification_id] = doc
-
-    def screened(verification_id: int) -> ConsoleAmlQuery | None:
-        doc = documents.get(verification_id)
-        fields = (doc.extracted or {}) if doc else {}
-        name = fields.get("full_name") or " ".join(filter(None, [fields.get("given_names"), fields.get("surname")]))
-        if not name:
-            return None
-        return ConsoleAmlQuery(
-            full_name=name,
-            date_of_birth=fields.get("date_of_birth"),
-            nationality=fields.get("nationality"),
-            id_number=None,
-        )
-
-    return ConsoleAmlScreeningList(
-        items=[
-            ConsoleAmlScreening(
-                verification_id=str(s.verification_id),
-                reference=s.verification.reference,
-                verification_status=_effective(s.verification),
-                step_status=s.status.value,
-                attempt=s.attempt,
-                client=_client(s.verification.account),
-                applicant=_applicant(s.verification, scans.get(s.verification_id)),
-                screened=screened(s.verification_id),
-                result=_result(s.result),
+    # Newest first across both: take enough of each to fill this page, then merge.
+    enough = page * page_size
+    entries: list[ConsoleAmlEntry] = []
+    if use_searches:
+        listed = select(AuditEvent).where(*search_filters)
+        if outcome:
+            listed = listed.where(search_outcome == outcome)
+        events = db.scalars(listed.order_by(AuditEvent.created_at.desc(), AuditEvent.id.desc()).limit(enough)).all()
+        staff_ids = {int(e.actor) for e in events if e.actor.isdigit()}
+        staff = {a.id: a for a in db.scalars(select(Account).where(Account.id.in_(staff_ids)))} if staff_ids else {}
+        entries += [_search_entry(e, staff) for e in events]
+    if use_steps:
+        listed = screened(select(Step))
+        if outcome:
+            listed = listed.where(step_outcome == outcome)
+        steps = db.scalars(
+            listed.options(
+                selectinload(Step.verification).selectinload(Verification.applicant),
+                selectinload(Step.verification).selectinload(Verification.account),
             )
-            for s in steps
-        ],
+            .order_by(step_at.desc(), Step.id.desc())
+            .limit(enough)
+        ).all()
+        ids = [s.verification_id for s in steps]
+        scans = _latest_scans(db, ids)
+        documents: dict[int, Step] = {}
+        if ids:
+            for doc in db.scalars(
+                select(Step).where(Step.step == VerificationStep.document, Step.verification_id.in_(ids)).order_by(Step.attempt)
+            ):
+                documents[doc.verification_id] = doc
+        entries += [_verification_entry(s, documents.get(s.verification_id), scans.get(s.verification_id)) for s in steps]
+
+    entries.sort(key=lambda e: e.at, reverse=True)
+    return ConsoleAmlEntryList(
+        items=entries[(page - 1) * page_size : enough],
         total=total,
         page=page,
         page_size=page_size,
         outcome_counts=outcome_counts,
+        source_counts=source_counts,
+        thresholds={"possible": settings.YENTE_POSSIBLE_THRESHOLD, "strong": settings.YENTE_STRONG_THRESHOLD},
     )
