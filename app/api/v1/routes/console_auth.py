@@ -10,16 +10,17 @@ endpoint cannot be used to learn which addresses are staff.
 
 from datetime import UTC, datetime
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.api.deps import current_console_account
 from app.core import security
-from app.db.models import Account
+from app.db.models import Account, AuditEvent
 from app.db.session import get_session
 from app.schemas.auth import LoginRequest
 from app.schemas.console import ConsoleTokenResponse, ConsoleUserResponse
+from app.services.network import client_ip
 
 router = APIRouter(prefix="/console/auth", tags=["admin console"])
 
@@ -38,22 +39,39 @@ def _as_user(account: Account) -> ConsoleUserResponse:
     )
 
 
+def _record(db: Session, request: Request, account: Account, event_type: str) -> None:
+    """A sign-in by a staff account, kept in the audit log. Refusals for an email
+    that is not staff are not recorded: there is nobody to attribute them to."""
+    db.add(
+        AuditEvent(
+            event_type=event_type,
+            actor=str(account.id),
+            payload={"by": account.email, "ip": client_ip(request), "user_agent": request.headers.get("user-agent")},
+        )
+    )
+    db.commit()
+
+
 @router.post("/login", response_model=ConsoleTokenResponse)
-def login(body: LoginRequest, db: Session = Depends(get_session)) -> ConsoleTokenResponse:
+def login(body: LoginRequest, request: Request, db: Session = Depends(get_session)) -> ConsoleTokenResponse:
     account = db.scalar(select(Account).where(Account.email == body.email.lower().strip()))
     # Verified even when there is no such account, so every refusal takes as long.
     stored = account.password_hash if account else security.hash_password("no such account")
     correct = security.verify_password(body.password, stored)
 
-    if account is None or not correct or not account.console_role:
+    if account is None or not account.console_role:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, _WRONG)
+    if not correct:
+        _record(db, request, account, "console.sign_in_failed")
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, _WRONG)
     if not account.is_active:
+        _record(db, request, account, "console.sign_in_refused")
         raise HTTPException(status.HTTP_403_FORBIDDEN, "This account has been suspended")
 
     if security.needs_rehash(account.password_hash):
         account.password_hash = security.hash_password(body.password)
     account.last_login_at = datetime.now(UTC)
-    db.commit()
+    _record(db, request, account, "console.sign_in")
     db.refresh(account)
 
     token, seconds = security.issue_console_token(
