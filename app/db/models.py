@@ -711,3 +711,21 @@ class DueDiligenceForm(Base):
     clients: Mapped[list["Account"]] = relationship(
         secondary="due_diligence_form_clients", order_by="Account.id"
     )
+
+
+class ConsoleSetting(Base):
+    """A platform setting changed in the admin console.
+
+    One row per setting that has been changed; a setting without a row takes
+    its default from the environment (app/core/config.py). Read through
+    app/services/platform_settings.py, never directly.
+    """
+
+    __tablename__ = "console_settings"
+
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    value: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    updated_by_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("accounts.id", ondelete="SET NULL")
+    )
+    updated_at: Mapped[UpdatedAt]

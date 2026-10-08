@@ -18,6 +18,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.services import platform_settings
 from app.engines.fields import to_alpha3
 from app.pipeline.ai_image import AI_GENERATED
 from app.db.models import (
@@ -129,7 +130,7 @@ def create_verification(
     applicant = find_or_create_applicant(db, account_id, client_customer_id, claimed)
 
     token = secrets.token_urlsafe(32)
-    ttl = ttl_minutes or settings.SESSION_TTL_MINUTES
+    ttl = ttl_minutes or platform_settings.value("session_ttl_minutes")
     domain = settings.VERIFY_BASE_URL.strip() if settings.VERIFY_BASE_URL else base_url
 
     verification = Verification(

@@ -10,6 +10,8 @@ from datetime import date, datetime
 
 from pydantic import BaseModel, Field
 
+from app.schemas.auth import PASSWORD
+
 
 class ConsoleUserResponse(BaseModel):
     id: str
@@ -530,3 +532,32 @@ class ConsoleReviewResult(BaseModel):
 
 
 ConsoleVerificationDetail.model_rebuild()
+
+
+# Settings: the few platform settings console owners and admins can change.
+
+class ConsoleSettings(BaseModel):
+    # Minutes a verification link stays open when the client sends no ttl.
+    session_ttl_minutes: int
+
+
+class ConsoleSettingsView(BaseModel):
+    values: ConsoleSettings
+    defaults: ConsoleSettings
+    # The settings changed from their default in the console.
+    changed: list[str]
+    max_session_ttl_minutes: int
+
+
+class ConsoleSettingsUpdate(BaseModel):
+    session_ttl_minutes: int | None = None
+
+
+class ConsoleProfileUpdate(BaseModel):
+    first_name: str = Field(min_length=1, max_length=80)
+    last_name: str = Field(min_length=1, max_length=80)
+
+
+class ConsolePasswordChange(BaseModel):
+    current_password: str = Field(min_length=1, max_length=200)
+    new_password: str = PASSWORD

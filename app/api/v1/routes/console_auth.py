@@ -19,7 +19,7 @@ from app.core import security
 from app.db.models import Account, AuditEvent
 from app.db.session import get_session
 from app.schemas.auth import LoginRequest
-from app.schemas.console import ConsoleTokenResponse, ConsoleUserResponse
+from app.schemas.console import ConsolePasswordChange, ConsoleProfileUpdate, ConsoleTokenResponse, ConsoleUserResponse
 from app.services.network import client_ip
 
 router = APIRouter(prefix="/console/auth", tags=["admin console"])
@@ -82,4 +82,52 @@ def login(body: LoginRequest, request: Request, db: Session = Depends(get_sessio
 
 @router.get("/me", response_model=ConsoleUserResponse)
 def me(account: Account = Depends(current_console_account)) -> ConsoleUserResponse:
+    return _as_user(account)
+
+
+@router.patch("/me", response_model=ConsoleUserResponse)
+def update_me(
+    body: ConsoleProfileUpdate,
+    request: Request,
+    account: Account = Depends(current_console_account),
+    db: Session = Depends(get_session),
+) -> ConsoleUserResponse:
+    """Change the signed-in member's own name."""
+    before = {"first_name": account.first_name, "last_name": account.last_name}
+    account.first_name = body.first_name.strip()
+    account.last_name = body.last_name.strip()
+    db.add(
+        AuditEvent(
+            event_type="console.profile_updated",
+            actor=str(account.id),
+            payload={"by": account.email, "before": before, "after": {"first_name": account.first_name, "last_name": account.last_name}, "ip": client_ip(request)},
+        )
+    )
+    db.commit()
+    db.refresh(account)
+    return _as_user(account)
+
+
+@router.post("/password", response_model=ConsoleUserResponse)
+def change_password(
+    body: ConsolePasswordChange,
+    request: Request,
+    account: Account = Depends(current_console_account),
+    db: Session = Depends(get_session),
+) -> ConsoleUserResponse:
+    """Change the signed-in member's own password. The current one is required."""
+    if not security.verify_password(body.current_password, account.password_hash):
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "The current password is wrong")
+    if body.new_password == body.current_password:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "The new password is the same as the current one")
+    account.password_hash = security.hash_password(body.new_password)
+    db.add(
+        AuditEvent(
+            event_type="console.password_changed",
+            actor=str(account.id),
+            payload={"by": account.email, "ip": client_ip(request)},
+        )
+    )
+    db.commit()
+    db.refresh(account)
     return _as_user(account)
