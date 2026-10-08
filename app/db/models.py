@@ -729,3 +729,32 @@ class ConsoleSetting(Base):
         BigInteger, ForeignKey("accounts.id", ondelete="SET NULL")
     )
     updated_at: Mapped[UpdatedAt]
+
+
+class ConsoleInvite(Base):
+    """An invitation to join the admin console, accepted through a one-time link.
+
+    There is no email yet, so whoever invites copies the link and sends it. Only
+    a hash of the link's token is kept: the link is shown once, when it is made,
+    and making a new one replaces it.
+    """
+
+    __tablename__ = "console_invites"
+
+    id: Mapped[IntPk]
+    email: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    first_name: Mapped[str | None] = mapped_column(String(80))
+    last_name: Mapped[str | None] = mapped_column(String(80))
+    role: Mapped[str] = mapped_column(String(16), nullable=False)
+    products: Mapped[list] = mapped_column(JSONB, nullable=False, server_default=_EMPTY_LIST)
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    invited_by_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("accounts.id", ondelete="SET NULL")
+    )
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    accepted_at: Mapped[Timestamp | None]
+    account_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("accounts.id", ondelete="SET NULL")
+    )
+    revoked_at: Mapped[Timestamp | None]
+    created_at: Mapped[CreatedAt]
