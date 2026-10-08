@@ -96,8 +96,11 @@ def _require_turn(verification: Verification, step: VerificationStep) -> None:
 
 
 def _passed(verification: Verification, step: VerificationStep) -> bool:
+    """Done, as far as the order of steps goes: passed, or flagged for a reviewer.
+    A flagged step is the reviewer's to decide, not something the person can fix,
+    so it does not hold back the steps after it (or a redo a reviewer asked for)."""
     rows = [s for s in verification.steps if s.step == step]
-    return bool(rows) and max(rows, key=lambda s: s.attempt).status == StepStatus.passed
+    return bool(rows) and max(rows, key=lambda s: s.attempt).status in (StepStatus.passed, StepStatus.review)
 
 
 def _read(upload: UploadFile, field: str) -> bytes:

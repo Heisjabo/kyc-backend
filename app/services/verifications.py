@@ -355,6 +355,11 @@ def settle(db: Session, verification: Verification) -> Verification:
     return verification
 
 
+def notify_client(db: Session, verification: Verification) -> None:
+    """Tell the client's callback where the verification stands now."""
+    _fire_callback(db, verification)
+
+
 def _fire_callback(db: Session, verification: Verification) -> None:
     if not verification.callback_url:
         return

@@ -19,6 +19,7 @@ from sqlalchemy import String, and_, case, cast, func, literal, or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.api.deps import console_product
+from app.api.v1.routes.console_reviews import reviews_of
 from app.db.models import (
     Account,
     Applicant,
@@ -224,6 +225,7 @@ def read_verification(
     return ConsoleVerificationDetail(
         **summary.model_dump(),
         aml=latest[VerificationStep.aml].result or None if VerificationStep.aml in latest else None,
+        reviews=reviews_of(db, verification.id),
         language=verification.language,
         warnings=verification.warnings,
         started_at=verification.started_at,
