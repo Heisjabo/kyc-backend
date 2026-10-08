@@ -328,8 +328,9 @@ def read_session(token: str, db: Session = Depends(get_session)) -> SessionRespo
         if current is None or step.attempt > current.attempt:
             latest[step.step] = step
 
+    # A step flagged for review is done as far as the person is concerned.
     done = [name for name in verification.services
-            if latest.get(VerificationStep(name)) and latest[VerificationStep(name)].status == StepStatus.passed]
+            if latest.get(VerificationStep(name)) and latest[VerificationStep(name)].status in (StepStatus.passed, StepStatus.review)]
     outstanding = [name for name in verification.services if name not in done]
 
     return SessionResponse(

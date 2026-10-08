@@ -123,6 +123,8 @@ class ConsoleFile(BaseModel):
 
 class ConsoleVerificationDetail(ConsoleVerificationSummary):
     aml: dict | None = None
+    # Decisions staff have made on it, oldest first.
+    reviews: list["ConsoleReviewEvent"] = []
     language: str | None
     warnings: list[str]
     started_at: datetime | None
@@ -492,3 +494,39 @@ class ConsoleAnalyticsMetrics(BaseModel):
     clients: list[ConsoleMetricCount]
     # mobile, desktop: from the browser that sent the document and face steps.
     devices: list[ConsoleMetricCount]
+
+
+# Review decisions: what staff do with a verification the checks could not decide.
+
+class ConsoleReviewDecisionRequest(BaseModel):
+    # Why, kept in the audit log. Required to decline, optional to approve.
+    note: str | None = Field(default=None, max_length=1000)
+
+
+class ConsoleRedoRequest(BaseModel):
+    """Steps the person has to do again on the same link."""
+
+    steps: list[str] = Field(min_length=1)
+    note: str | None = Field(default=None, max_length=1000)
+    # How long the reopened link works for.
+    hours: int = Field(default=72, ge=1, le=24 * 30)
+
+
+class ConsoleReviewEvent(BaseModel):
+    action: str  # approved, declined or redo_requested
+    by: str
+    note: str | None
+    steps: list[str]
+    at: datetime
+
+
+class ConsoleReviewResult(BaseModel):
+    status: str
+    event: str | None
+    # Set when a redo was requested: the link to send the person.
+    session_url: str | None = None
+    expires_at: datetime | None = None
+    review: ConsoleReviewEvent
+
+
+ConsoleVerificationDetail.model_rebuild()
