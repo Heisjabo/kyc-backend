@@ -8,11 +8,18 @@
 - **The list.** One list of every console search and every verification whose
   AML step found something or could not screen, newest first. Verifications
   that came back with no match are left out: there is nothing to look at.
+- **Entity details.** Everything the watchlists hold on one matched entity,
+  read from yente when a reviewer opens it: identity details, positions, notes
+  and each sanction with its reason. Names stay as listed; the rest is shown
+  in English (app/screening/english.py).
 
 Searching is an action on a person, so readonly and support staff may not run
 one; anyone with Pangolin KYC may read the list.
 """
 
+import time
+
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session, selectinload
@@ -24,15 +31,19 @@ from app.db.models import Account, Applicant, AuditEvent, Step, Verification, Ve
 from app.db.session import get_session
 from app.schemas.console import (
     ConsoleAmlCandidate,
+    ConsoleAmlEntity,
     ConsoleAmlEntry,
     ConsoleAmlEntryList,
     ConsoleAmlQuery,
     ConsoleAmlResult,
+    ConsoleAmlSanction,
     ConsoleAmlSearchRequest,
     ConsoleAmlSearchResponse,
     ConsoleAmlTopMatch,
     ConsoleAmlVerificationRef,
 )
+from app.screening import yente
+from app.screening.english import english, english_only
 from app.screening.yente import Identity, ScreeningResult, screen
 from app.services.network import client_ip
 
@@ -47,7 +58,8 @@ OUTCOMES = ("no_match", "possible_match", "strong_match", "unavailable")
 
 def _values(properties: dict, key: str) -> list[str]:
     values = properties.get(key) or []
-    return [str(v) for v in values if v not in (None, "")] if isinstance(values, list) else []
+    # With nested=true some values are whole entities; those are read separately.
+    return [str(v) for v in values if v not in (None, "") and not isinstance(v, dict)] if isinstance(values, list) else []
 
 
 def _candidate(match: dict) -> ConsoleAmlCandidate:
@@ -67,7 +79,8 @@ def _candidate(match: dict) -> ConsoleAmlCandidate:
         birth_dates=_values(properties, "birthDate"),
         nationalities=_values(properties, "nationality"),
         countries=_values(properties, "country"),
-        positions=_values(properties, "position"),
+        # The full list, translated, is in the entity details; here only English.
+        positions=english_only(_values(properties, "position")),
         first_seen=match.get("first_seen"),
         last_seen=match.get("last_seen"),
     )
@@ -166,10 +179,44 @@ def _top(candidates: list[ConsoleAmlCandidate], stored: list[dict]) -> ConsoleAm
     return None
 
 
+def _from_top_matches(payload: dict) -> ConsoleAmlResult | None:
+    """A search made before whole answers were kept: its top matches, which carry
+    each entity's id, so the drawer can still load the full record of each."""
+    top = [m for m in payload.get("top_matches") or [] if isinstance(m, dict) and m.get("name")]
+    if not top and payload.get("outcome") is None:
+        return None
+    return ConsoleAmlResult(
+        outcome=payload.get("outcome") or "unavailable",
+        action="",
+        highest_score=payload.get("highest_score"),
+        dataset=payload.get("dataset") or "",
+        screened_at="",
+        error=payload.get("error"),
+        candidates=[
+            ConsoleAmlCandidate(
+                id=str(m.get("id") or ""),
+                name=str(m["name"]),
+                entity_type="",
+                score=float(m.get("score") or 0),
+                topics=list(m.get("topics") or []),
+                datasets=[],
+                aliases=[],
+                birth_dates=[],
+                nationalities=[],
+                countries=[],
+                positions=[],
+                first_seen=None,
+                last_seen=None,
+            )
+            for m in top
+        ],
+    )
+
+
 def _search_entry(event: AuditEvent, staff: dict[int, Account]) -> ConsoleAmlEntry:
     payload = event.payload
     account = staff.get(int(event.actor)) if event.actor.isdigit() else None
-    result = _result(payload["result"]) if isinstance(payload.get("result"), dict) else None
+    result = _result(payload["result"]) if isinstance(payload.get("result"), dict) else _from_top_matches(payload)
     return ConsoleAmlEntry(
         id=f"search:{event.id}",
         source="manual",
@@ -346,3 +393,94 @@ def list_results(
         source_counts=source_counts,
         thresholds={"possible": settings.YENTE_POSSIBLE_THRESHOLD, "strong": settings.YENTE_STRONG_THRESHOLD},
     )
+
+
+# One listed entity in full
+
+_IDENTIFIERS = {
+    "idNumber": "ID number",
+    "passportNumber": "Passport number",
+    "taxNumber": "Tax number",
+    "registrationNumber": "Registration number",
+    "innCode": "INN",
+    "ogrnCode": "OGRN",
+    "vatCode": "VAT number",
+    "swiftBic": "SWIFT/BIC",
+    "imoNumber": "IMO number",
+    "socialSecurityNumber": "Social security number",
+}
+
+
+def _nested(properties: dict, key: str) -> list[dict]:
+    return [v for v in properties.get(key) or [] if isinstance(v, dict)]
+
+
+def _sanction(entity: dict) -> ConsoleAmlSanction:
+    p = entity.get("properties") or {}
+    return ConsoleAmlSanction(
+        authority=english(_values(p, "authority")),
+        program=english(_values(p, "program")),
+        reason=english(_values(p, "reason") + _values(p, "summary")),
+        provisions=english(_values(p, "provisions")),
+        country=_values(p, "country"),
+        start_date=_values(p, "startDate"),
+        end_date=_values(p, "endDate"),
+        listing_date=_values(p, "listingDate"),
+        source_urls=_values(p, "sourceUrl"),
+    )
+
+
+_CACHE_SECONDS = 3600
+_entities: dict[str, tuple[float, ConsoleAmlEntity]] = {}
+
+
+@router.get("/entities/{entity_id}", response_model=ConsoleAmlEntity)
+def read_entity(entity_id: str, _: Account = Depends(console_product("kyc"))) -> ConsoleAmlEntity:
+    """Everything the watchlists hold on one matched entity: identity details,
+    positions, notes and each sanction with its reason. Names are as listed;
+    the rest is in English, translated when no English version exists."""
+    cached = _entities.get(entity_id)
+    if cached and time.monotonic() - cached[0] < _CACHE_SECONDS:
+        return cached[1]
+    try:
+        data = yente.entity(entity_id)
+    except httpx.HTTPError as exc:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, "The watchlist service cannot be reached") from exc
+    if data is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "This entity is no longer on the watchlists")
+
+    p = data.get("properties") or {}
+    names = _values(p, "name")
+    name = str(data.get("caption") or (names[0] if names else "Unnamed"))
+    addresses = _values(p, "address") + [
+        str(a.get("caption") or "") for a in _nested(p, "addressEntity") if a.get("caption")
+    ]
+    result = ConsoleAmlEntity(
+        id=str(data.get("id") or entity_id),
+        name=name,
+        entity_type=str(data.get("schema") or ""),
+        names=names,
+        aliases=list(dict.fromkeys(_values(p, "alias") + _values(p, "weakAlias") + _values(p, "previousName"))),
+        topics=_values(p, "topics"),
+        datasets=[str(d) for d in data.get("datasets") or []],
+        gender=_values(p, "gender"),
+        birth_dates=_values(p, "birthDate"),
+        birth_places=english(_values(p, "birthPlace")),
+        death_dates=_values(p, "deathDate"),
+        nationalities=_values(p, "nationality"),
+        citizenships=_values(p, "citizenship"),
+        countries=_values(p, "country"),
+        positions=english(_values(p, "position")),
+        titles=english(_values(p, "title")),
+        notes=english(_values(p, "notes") + _values(p, "description") + _values(p, "summary")),
+        addresses=english(addresses),
+        identifiers={label: values for key, label in _IDENTIFIERS.items() if (values := _values(p, key))},
+        sanctions=[_sanction(s) for s in _nested(p, "sanctions")],
+        source_urls=_values(p, "sourceUrl"),
+        websites=_values(p, "website"),
+        first_seen=data.get("first_seen"),
+        last_seen=data.get("last_seen"),
+        last_change=data.get("last_change"),
+    )
+    _entities[entity_id] = (time.monotonic(), result)
+    return result
