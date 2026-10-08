@@ -164,16 +164,22 @@ class ConsoleClientSummary(BaseModel):
     last_verification_at: datetime | None
     # Neither revoked nor past their expiry.
     active_keys: int
+    # The console role (owner, admin, reviewer, support, readonly), or None for a
+    # client account, and the console products it may open.
+    role: str | None = None
+    products: list[str] = []
 
 
 class ConsoleClientOverview(BaseModel):
-    """Totals across every client, whatever the filters, for the page's headline numbers."""
+    """Totals across every account, whatever the filters, for the page's headline numbers."""
 
     clients: int
     active: int
     suspended: int
     active_keys: int
     verifications: int
+    # Accounts with a console role.
+    staff: int = 0
 
 
 class ConsoleClientList(BaseModel):
@@ -688,3 +694,24 @@ class ConsoleAmlEntity(BaseModel):
     first_seen: str | None
     last_seen: str | None
     last_change: str | None
+
+# Accounts: created and given roles by owners and admins in the console.
+
+class ConsoleAccountCreate(BaseModel):
+    email: str = Field(min_length=3, max_length=254, pattern=r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
+    password: str = PASSWORD
+    first_name: str = Field(min_length=1, max_length=80)
+    last_name: str = Field(min_length=1, max_length=80)
+    phone: str = Field(min_length=5, max_length=32)
+    country_code: str = Field(min_length=1, max_length=8, description="Dialling code, e.g. +250")
+    country: str = Field(min_length=2, max_length=80)
+    date_of_birth: date
+    # None for a client account; otherwise a console role.
+    role: str | None = None
+    products: list[str] = []
+
+
+class ConsoleAccountAccess(BaseModel):
+    # None makes the account a client account, without console access.
+    role: str | None
+    products: list[str] = []
