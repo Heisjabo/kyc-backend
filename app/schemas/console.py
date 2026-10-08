@@ -409,3 +409,84 @@ class ConsoleAuditEventList(BaseModel):
     # How many match the other filters, for each category (the part of the
     # event type before the dot: aml, api_key, console, due_diligence_form).
     category_counts: dict[str, int]
+
+
+# Metrics for the console's Overview and Analytics pages. Every window is whole
+# UTC days, both ends included, and is compared with the window of the same
+# length just before it. Rates are 0 to 1, or null when nothing was decided.
+
+class ConsoleMetricRange(BaseModel):
+    from_: date = Field(serialization_alias="from")
+    to: date
+    days: int
+
+
+class ConsoleMetricValue(BaseModel):
+    value: float | None
+    previous: float | None
+
+
+class ConsoleMetricPoint(BaseModel):
+    # The first day of the bucket: a day, or a week starting on that day.
+    date: date
+    verifications: int
+    passed: int
+    failed: int
+    pass_rate: float | None
+
+
+class ConsoleMetricSeries(BaseModel):
+    granularity: str  # day or week
+    points: list[ConsoleMetricPoint]
+
+
+class ConsoleMetricCount(BaseModel):
+    key: str
+    label: str | None = None
+    count: int
+    share: float | None = None
+    pass_rate: float | None = None
+
+
+class ConsoleAwaitingReview(BaseModel):
+    count: int
+    # When the longest-waiting one finished its session, if any is waiting.
+    oldest_at: datetime | None
+
+
+class ConsoleOverviewMetrics(BaseModel):
+    range: ConsoleMetricRange
+    verifications: ConsoleMetricValue
+    pass_rate: ConsoleMetricValue
+    # Median seconds from the session opening to its decision.
+    completion_seconds: ConsoleMetricValue
+    # Right now, not in the window.
+    awaiting_review: ConsoleAwaitingReview
+    series: ConsoleMetricSeries
+    # By status as a client would see it now, for verifications created in the window.
+    outcomes: list[ConsoleMetricCount]
+    # The commonest reasons on failed verifications, most first.
+    decline_reasons: list[ConsoleMetricCount]
+
+
+class ConsoleStepTime(BaseModel):
+    step: str
+    median_seconds: float
+    count: int
+
+
+class ConsoleAnalyticsMetrics(BaseModel):
+    range: ConsoleMetricRange
+    # Reached a decision (passed, failed or needs review) out of every verification created.
+    completion_rate: ConsoleMetricValue
+    # Sent to review out of every verification created.
+    review_rate: ConsoleMetricValue
+    # Attempts per step taken, retakes included: 1.0 means nobody retook anything.
+    attempts_per_step: ConsoleMetricValue
+    series: ConsoleMetricSeries
+    countries: list[ConsoleMetricCount]
+    documents: list[ConsoleMetricCount]
+    step_times: list[ConsoleStepTime]
+    clients: list[ConsoleMetricCount]
+    # mobile, desktop: from the browser that sent the document and face steps.
+    devices: list[ConsoleMetricCount]
