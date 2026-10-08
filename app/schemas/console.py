@@ -561,3 +561,77 @@ class ConsoleProfileUpdate(BaseModel):
 class ConsolePasswordChange(BaseModel):
     current_password: str = Field(min_length=1, max_length=200)
     new_password: str = PASSWORD
+
+
+# Team: console members and invitations to join.
+
+class ConsoleTeamMember(BaseModel):
+    id: str
+    email: str
+    first_name: str
+    last_name: str
+    role: str
+    products: list[str]
+    active: bool
+    last_login_at: datetime | None
+    created_at: datetime
+
+
+class ConsoleTeamInvite(BaseModel):
+    id: str
+    email: str
+    first_name: str | None
+    last_name: str | None
+    role: str
+    products: list[str]
+    invited_by: str | None
+    expires_at: datetime
+    created_at: datetime
+
+
+class ConsoleTeam(BaseModel):
+    members: list[ConsoleTeamMember]
+    # Not yet accepted, revoked or expired.
+    invites: list[ConsoleTeamInvite]
+
+
+class ConsoleInviteRequest(BaseModel):
+    email: str = Field(min_length=3, max_length=254, pattern=r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
+    first_name: str | None = Field(default=None, max_length=80)
+    last_name: str | None = Field(default=None, max_length=80)
+    role: str
+    products: list[str] = Field(min_length=1)
+
+
+class ConsoleInviteCreated(BaseModel):
+    invite: ConsoleTeamInvite
+    # Shown once: the console builds the link to send from it.
+    token: str
+
+
+class ConsoleMemberUpdate(BaseModel):
+    role: str | None = None
+    products: list[str] | None = Field(default=None, min_length=1)
+    active: bool | None = None
+
+
+class ConsoleInvitePreview(BaseModel):
+    """What the person opening an invite link is shown before accepting."""
+
+    email: str
+    first_name: str | None
+    last_name: str | None
+    role: str
+    products: list[str]
+    invited_by: str | None
+    expires_at: datetime
+
+
+class ConsoleInviteAccept(BaseModel):
+    first_name: str = Field(min_length=1, max_length=80)
+    last_name: str = Field(min_length=1, max_length=80)
+    password: str = PASSWORD
+    phone: str = Field(min_length=5, max_length=32)
+    country_code: str = Field(min_length=1, max_length=8, description="Dialling code, e.g. +250")
+    country: str = Field(min_length=2, max_length=80)
+    date_of_birth: date
