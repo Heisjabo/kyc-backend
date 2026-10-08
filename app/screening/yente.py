@@ -131,3 +131,21 @@ def run_pending(db, verification, latest):
     finish_step(db, aml, status=status, result=result.model_dump(),
                 reasons=[] if status == StepStatus.passed else ['AML_' + result.outcome.upper()],
                 warnings=['AML_UNAVAILABLE'] if result.outcome == 'unavailable' else [])
+
+
+def entity(entity_id: str) -> dict | None:
+    """One listed entity in full, with the sanctions and other entities linked to
+    it, or None when yente does not know it. Raises httpx.HTTPError when yente
+    cannot be reached."""
+    token = os.environ.get('YENTE_API_TOKEN', settings.YENTE_API_TOKEN).strip()
+    headers = {'Authorization': 'Bearer ' + token} if token else {}
+    with httpx.Client(timeout=20, trust_env=False, headers=headers) as client:
+        response = client.get(
+            os.environ.get('YENTE_BASE_URL', settings.YENTE_BASE_URL).rstrip('/')
+            + '/entities/' + quote(entity_id, safe=''),
+            params={'nested': 'true'},
+        )
+    if response.status_code == 404:
+        return None
+    response.raise_for_status()
+    return response.json()

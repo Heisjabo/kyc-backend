@@ -635,3 +635,56 @@ class ConsoleInviteAccept(BaseModel):
     country_code: str = Field(min_length=1, max_length=8, description="Dialling code, e.g. +250")
     country: str = Field(min_length=2, max_length=80)
     date_of_birth: date
+
+
+class ConsoleAmlText(BaseModel):
+    """Watchlist text, in English where possible. Names are never translated."""
+
+    text: str
+    # The text as listed, when `text` is a translation of it.
+    original: str | None = None
+    translated: bool = False
+    # False when no English version exists and translation was not possible.
+    english: bool = True
+
+
+class ConsoleAmlSanction(BaseModel):
+    authority: list[ConsoleAmlText]
+    program: list[ConsoleAmlText]
+    reason: list[ConsoleAmlText]
+    provisions: list[ConsoleAmlText]
+    country: list[str]
+    start_date: list[str]
+    end_date: list[str]
+    listing_date: list[str]
+    source_urls: list[str]
+
+
+class ConsoleAmlEntity(BaseModel):
+    """Everything the watchlists hold on one listed entity, for the AML drawer."""
+
+    id: str
+    name: str
+    entity_type: str
+    names: list[str]
+    aliases: list[str]
+    topics: list[str]
+    datasets: list[str]
+    gender: list[str]
+    birth_dates: list[str]
+    birth_places: list[ConsoleAmlText]
+    death_dates: list[str]
+    nationalities: list[str]
+    citizenships: list[str]
+    countries: list[str]
+    positions: list[ConsoleAmlText]
+    titles: list[ConsoleAmlText]
+    notes: list[ConsoleAmlText]
+    addresses: list[ConsoleAmlText]
+    identifiers: dict[str, list[str]]
+    sanctions: list[ConsoleAmlSanction]
+    source_urls: list[str]
+    websites: list[str]
+    first_seen: str | None
+    last_seen: str | None
+    last_change: str | None
