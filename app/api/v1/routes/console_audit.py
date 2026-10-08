@@ -1,8 +1,9 @@
 """The audit log, for Pangolin staff in the admin console.
 
 Everything recorded in audit_events, newest first: console sign-ins, AML
-searches, API key controls and due diligence form changes, each with who did it
-and the details stored at the time. Only owners and admins may read it, since it
+searches, review decisions, API key controls, due diligence form changes and
+every HTTP request the service answered, each with who did it and the details
+stored at the time. Only owners and admins may read it, since it
 holds the names people searched for and the addresses staff signed in from.
 """
 
@@ -31,7 +32,7 @@ def _day_start(day: date) -> datetime:
 
 @router.get("", response_model=ConsoleAuditEventList)
 def list_audit_events(
-    category: str | None = Query(default=None, max_length=40, description="aml, api_key, console or due_diligence_form"),
+    category: str | None = Query(default=None, max_length=40, description="aml, api_key, console, due_diligence_form, review or request"),
     actor: str | None = Query(default=None, max_length=40, description="A console account id, or system"),
     q: str | None = Query(default=None, max_length=120, description="Text anywhere in the event type or its details"),
     created_from: date | None = Query(default=None, description="On or after this day (UTC)"),
