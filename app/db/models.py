@@ -164,6 +164,10 @@ class ApiKey(Base):
     # Set by Pangolin staff in the admin console to stop a key for now. Unlike
     # revoking, it can be undone: clearing it lets the key work again.
     suspended_at: Mapped[Timestamp | None]
+    # Set when the owner deletes the key: it is revoked first, then left out of
+    # the owner's list. The row stays, so the requests made with it and the
+    # audit trail still name it.
+    deleted_at: Mapped[Timestamp | None]
     created_at: Mapped[CreatedAt]
 
     account: Mapped["Account"] = relationship(back_populates="api_keys")

@@ -202,6 +202,8 @@ class ConsoleApiKey(BaseModel):
     last_used_at: datetime | None
     revoked_at: datetime | None
     suspended_at: datetime | None
+    # Set once the owner deleted it. Owners no longer see it; staff still do.
+    deleted_at: datetime | None = None
 
 
 class ConsoleClientDetail(ConsoleClientSummary):
