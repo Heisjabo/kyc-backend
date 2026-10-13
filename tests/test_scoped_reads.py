@@ -230,13 +230,28 @@ def test_keys_are_listed_made_and_revoked_on_the_callers_account(client, db_sess
     assert {k["client"]["email"] for k in listed["items"]} == {"ops@acme.example.com"}
 
     key_id = made.json()["id"]
+    assert client.post(f"/v1/api-keys/{key_id}/revoke", headers=auth(beta)).status_code == 404
     assert client.delete(f"/v1/api-keys/{key_id}", headers=auth(beta)).status_code == 404
-    assert client.delete(f"/v1/api-keys/{key_id}", headers=auth(acme)).json()["revoked_at"] is not None
+    assert client.post(f"/v1/api-keys/{key_id}/revoke", headers=auth(acme)).json()["revoked_at"] is not None
     assert get(client, auth(acme), "/api-keys", state="revoked")["total"] == 1
 
-    # Staff list every client's keys, and make theirs in the console, not here.
+    # Deleting the working key revokes it and takes it off the list; nothing about it is lost.
+    server_id = next(k["id"] for k in listed["items"] if k["name"] == "server")
+    deleted = client.delete(f"/v1/api-keys/{server_id}", headers=auth(acme)).json()
+    assert deleted["revoked_at"] and deleted["deleted_at"]
+    assert [k["name"] for k in get(client, auth(acme), "/api-keys")["items"]] == ["staging"]
+    assert client.delete(f"/v1/api-keys/{server_id}", headers=auth(acme)).status_code == 404
+    assert client.get("/v1/verifications", headers=two_accounts["acme_key"]).status_code == 401
+    events = {(e["event_type"], e["payload"].get("name")) for e in get(client, auth(acme), "/audit-events")["items"]}
+    assert {("api_key.created", "server"), ("api_key.revoked", "server"), ("api_key.deleted", "server")} <= events
+    # Verifications opened with it are still there.
+    assert get(client, auth(acme), "/verifications")["total"] == 2
+
+    # Staff list every client's keys, the deleted one too, and make theirs in the console, not here.
     token = staff(client, db_session)
-    assert get(client, auth(token), "/api-keys")["total"] == 3
+    everyone = get(client, auth(token), "/api-keys")
+    assert everyone["total"] == 3
+    assert [k["name"] for k in everyone["items"] if k["deleted_at"]] == ["server"]
     assert client.post("/v1/api-keys", json={"name": "x"}, headers=auth(token)).status_code == 401
 
 

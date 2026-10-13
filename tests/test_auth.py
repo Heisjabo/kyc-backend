@@ -299,9 +299,15 @@ def test_a_revoked_key_stops_working(client):
     created = make_key(client, token).json()
     assert client.guarded.get("/guarded", headers={"X-API-Key": created["key"]}).status_code == 200
 
-    revoked = client.delete(f"/v1/api-keys/{created['id']}", headers=auth(token))
+    revoked = client.post(f"/v1/api-keys/{created['id']}/revoke", headers=auth(token))
     assert revoked.status_code == 200 and revoked.json()["is_valid"] is False
     assert client.guarded.get("/guarded", headers={"X-API-Key": created["key"]}).status_code == 401
+
+    # Deleting a key that still works stops it too.
+    other = make_key(client, token).json()
+    deleted = client.delete(f"/v1/api-keys/{other['id']}", headers=auth(token))
+    assert deleted.status_code == 200 and deleted.json()["deleted_at"] and deleted.json()["revoked_at"]
+    assert client.guarded.get("/guarded", headers={"X-API-Key": other["key"]}).status_code == 401
 
 
 def test_an_expired_key_stops_working(client, db_session):

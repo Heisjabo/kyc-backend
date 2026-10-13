@@ -101,6 +101,8 @@ class ApiKeyResponse(BaseModel):
     revoked_at: datetime | None
     # Set while Pangolin has suspended the key; it does not work until resumed.
     suspended_at: datetime | None = None
+    # Set once the owner deleted it.
+    deleted_at: datetime | None = None
     is_valid: bool
 
 

@@ -37,6 +37,7 @@ def _as_response(key: ApiKey) -> dict:
         "last_used_at": key.last_used_at,
         "revoked_at": key.revoked_at,
         "suspended_at": key.suspended_at,
+        "deleted_at": key.deleted_at,
         "is_valid": key.revoked_at is None and key.suspended_at is None and expires > now,
     }
 
@@ -88,7 +89,15 @@ def list_keys(
     """Keys newest first, including the spent ones, with a count per state. A
     client gets its own, so it can see what exists and what each has been doing;
     Pangolin staff get every client's."""
-    keys = api_key_list(db, q=q, state=state, client_id=caller.scope_for(client_id), page=page, page_size=page_size)
+    keys = api_key_list(
+        db,
+        q=q,
+        state=state,
+        client_id=caller.scope_for(client_id),
+        page=page,
+        page_size=page_size,
+        include_deleted=caller.staff,
+    )
     if not caller.staff:
         for row in keys.items:
             if row.last_action is not None:
@@ -97,30 +106,53 @@ def list_keys(
     return keys
 
 
-@router.delete("/{key_id}", response_model=ApiKeyResponse)
+def _own_key(db: Session, account: Account, key_id: str) -> ApiKey:
+    """One of this account's keys that it has not deleted, named by its prefix
+    (what a person reads off a list) or by its id."""
+    mine = (ApiKey.account_id == account.id, ApiKey.deleted_at.is_(None))
+    key = db.scalar(select(ApiKey).where(ApiKey.prefix == key_id, *mine))
+    if key is None and key_id.isdigit():
+        key = db.scalar(select(ApiKey).where(ApiKey.id == int(key_id), *mine))
+    if key is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "No such key on this account")
+    return key
+
+
+def _revoke(db: Session, account: Account, key: ApiKey) -> None:
+    if key.revoked_at is None:
+        key.revoked_at = datetime.now(UTC)
+        _record(db, account, "revoked", key)
+
+
+@router.post("/{key_id}/revoke", response_model=ApiKeyResponse)
 def revoke_key(
     key_id: str,
     account: Account = Depends(current_account),
     db: Session = Depends(get_session),
 ) -> ApiKeyResponse:
-    """Stop a key working. The row stays: what it did should not disappear with it."""
-    # Keys are named either by their prefix, which is what a person reads off a
-    # list, or by their id.
-    key = db.scalar(
-        select(ApiKey).where(ApiKey.prefix == key_id, ApiKey.account_id == account.id)
-    )
-    if key is None and key_id.isdigit():
-        key = db.scalar(
-            select(ApiKey).where(ApiKey.id == int(key_id), ApiKey.account_id == account.id)
-        )
-    if key is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "No such key on this account")
-    if key.revoked_at is None:
-        key.revoked_at = datetime.now(UTC)
-        _record(db, account, "revoked", key)
-        db.commit()
-        db.refresh(key)
+    """Stop a key working. It stays on the list, revoked, so it can still be read
+    off there what it was and when it stopped."""
+    key = _own_key(db, account, key_id)
+    _revoke(db, account, key)
+    db.commit()
+    db.refresh(key)
     return ApiKeyResponse(**_as_response(key))
 
 
-
+@router.delete("/{key_id}", response_model=ApiKeyResponse)
+def delete_key(
+    key_id: str,
+    account: Account = Depends(current_account),
+    db: Session = Depends(get_session),
+) -> ApiKeyResponse:
+    """Delete a key: it is revoked if it still worked, then left out of this
+    account's list. Nothing is erased: the row stays, and the requests made with
+    it and its audit trail (made, revoked, deleted) remain in the account's
+    activity log."""
+    key = _own_key(db, account, key_id)
+    _revoke(db, account, key)
+    key.deleted_at = datetime.now(UTC)
+    _record(db, account, "deleted", key)
+    db.commit()
+    db.refresh(key)
+    return ApiKeyResponse(**_as_response(key))

@@ -89,6 +89,7 @@ def _row(key: ApiKey, state: str, last_action: ConsoleApiKeyAction | None) -> Co
         last_used_at=key.last_used_at,
         revoked_at=key.revoked_at,
         suspended_at=key.suspended_at,
+        deleted_at=key.deleted_at,
         state=state,
         client=ConsoleClient(
             id=str(key.account.id),
@@ -114,16 +115,26 @@ def list_api_keys(
 
 
 def api_key_list(
-    db: Session, *, q: str | None, state: str | None, client_id: int | None, page: int, page_size: int
+    db: Session,
+    *,
+    q: str | None,
+    state: str | None,
+    client_id: int | None,
+    page: int,
+    page_size: int,
+    include_deleted: bool = True,
 ) -> ConsoleApiKeyList:
     """Keys newest first, of every client or only of `client_id`. Shared with the
-    client dashboard, which always passes its own account."""
+    client's own list, which always passes its account and leaves out the keys it
+    deleted."""
     if state is not None and state not in _STATES:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "State must be one of " + ", ".join(_STATES))
 
     filters = []
     if client_id is not None:
         filters.append(ApiKey.account_id == client_id)
+    if not include_deleted:
+        filters.append(ApiKey.deleted_at.is_(None))
     if q and q.strip():
         text = q.strip()
         # A pasted key or a displayed "kyc_<prefix>_…" finds its key by the prefix.
