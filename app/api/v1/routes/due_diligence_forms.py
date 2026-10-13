@@ -18,7 +18,7 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
-from app.api.deps import account_from_api_key, console_product, console_role
+from app.api.deps import Caller, console_product, console_role, current_caller
 from app.db.models import (
     Account,
     Applicant,
@@ -124,14 +124,51 @@ def _record(db: Session, staff: Account, action: str, form: DueDiligenceForm, ch
 
 @router.get("/due-diligence/forms", response_model=list[ClientForm])
 def client_forms(
-    account: Account = Depends(account_from_api_key),
+    caller: Caller = Depends(current_caller),
     db: Session = Depends(get_session),
 ) -> list[ClientForm]:
-    """The forms this account may attach to a verification, by sending `form_id`."""
+    """For a client, the forms it may attach to a verification by sending
+    `form_id`; for Pangolin staff, every form. Each with how many times it has
+    been answered on the caller's verifications."""
+    given = (
+        forms.forms_for(db, caller.account.id)
+        if not caller.staff
+        else list(db.scalars(select(DueDiligenceForm).order_by(DueDiligenceForm.name)).all())
+    )
+    answered = select(Verification.form_id, func.count()).join(Step, Step.verification_id == Verification.id).where(
+        Verification.form_id.in_([f.public_id for f in given]),
+        Step.step == VerificationStep.due_diligence,
+        Step.status == StepStatus.passed,
+    )
+    if caller.scope is not None:
+        answered = answered.where(Verification.account_id == caller.scope)
+    counts = dict(db.execute(answered.group_by(Verification.form_id)).all()) if given else {}
     return [
-        ClientForm(id=form.public_id, name=form.name, description=form.description, fields=forms.fields_of(form))
-        for form in forms.forms_for(db, account.id)
+        ClientForm(
+            id=form.public_id,
+            name=form.name,
+            description=form.description,
+            fields=forms.fields_of(form),
+            status=form.status,
+            responses=counts.get(form.public_id, 0),
+            created_at=form.created_at,
+            updated_at=form.updated_at,
+        )
+        for form in given
     ]
+
+
+@router.get("/due-diligence/responses", response_model=ResponseList)
+def client_responses(
+    form_id: str | None = Query(default=None, description="Only this form's answers"),
+    client_id: int | None = Query(default=None, description="Pangolin staff only: one client's"),
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    caller: Caller = Depends(current_caller),
+    db: Session = Depends(get_session),
+) -> ResponseList:
+    """Submitted forms, newest first: a client's own, or every client's for staff."""
+    return response_list(db, form_id=form_id, limit=limit, offset=offset, account_id=caller.scope_for(client_id))
 
 
 # The console

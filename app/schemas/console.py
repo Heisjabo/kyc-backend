@@ -409,6 +409,8 @@ class ConsoleAuditEvent(BaseModel):
     actor_name: str | None
     actor_email: str | None
     verification_id: str | None
+    # The client's own reference for that verification, which is how a client addresses it.
+    verification_reference: str | None = None
     payload: dict
     created_at: datetime
 

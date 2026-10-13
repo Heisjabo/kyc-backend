@@ -74,8 +74,8 @@ def test_a_suspended_key_is_refused_until_it_is_resumed(client, db_session, acme
 
     # The client's own key list says it is not valid.
     acme_token = client.post("/v1/auth/login", json={"email": "ops@acme.example.com", "password": PASSWORD}).json()["access_token"]
-    own_keys = client.get("/v1/api-keys", headers=auth(acme_token)).json()
-    assert own_keys[0]["is_valid"] is False
+    own_keys = client.get("/v1/api-keys", headers=auth(acme_token)).json()["items"]
+    assert own_keys[0]["state"] == "suspended"
     assert own_keys[0]["suspended_at"] is not None
 
     resumed = act(client, admin, acme["id"], "resume")

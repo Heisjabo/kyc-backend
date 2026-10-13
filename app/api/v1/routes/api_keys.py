@@ -10,15 +10,17 @@ one that leaks is always the oldest one.
 
 from datetime import UTC, datetime, timedelta
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.api.deps import current_account
+from app.api.deps import Caller, current_account, current_caller
 from app.core import security
-from app.db.models import Account, ApiKey
+from app.db.models import Account, ApiKey, AuditEvent
 from app.db.session import get_session
 from app.schemas.auth import ApiKeyResponse, CreateApiKeyRequest, CreatedApiKeyResponse
+from app.api.v1.routes.console_api_keys import api_key_list
+from app.schemas.console import ConsoleApiKeyList
 
 router = APIRouter(prefix="/api-keys", tags=["api keys"])
 
@@ -39,6 +41,17 @@ def _as_response(key: ApiKey) -> dict:
     }
 
 
+def _record(db: Session, account: Account, action: str, key: ApiKey) -> None:
+    """Kept in audit_events, so the account's API logs show who made or stopped which key."""
+    db.add(
+        AuditEvent(
+            event_type=f"api_key.{action}",
+            actor=str(account.id),
+            payload={"api_key_id": str(key.id), "name": key.name, "prefix": key.prefix, "by": account.email},
+        )
+    )
+
+
 @router.post("", response_model=CreatedApiKeyResponse, status_code=status.HTTP_201_CREATED)
 def create_key(
     body: CreateApiKeyRequest,
@@ -55,22 +68,33 @@ def create_key(
         expires_at=datetime.now(UTC) + timedelta(days=body.expires_in_days),
     )
     db.add(row)
+    db.flush()
+    _record(db, account, "created", row)
     db.commit()
     db.refresh(row)
     return CreatedApiKeyResponse(key=key, **_as_response(row))
 
 
-@router.get("", response_model=list[ApiKeyResponse])
+@router.get("", response_model=ConsoleApiKeyList)
 def list_keys(
-    account: Account = Depends(current_account),
+    q: str | None = Query(default=None, max_length=120, description="Key name or prefix"),
+    state: str | None = Query(default=None, description="active, expiring, suspended, expired or revoked"),
+    client_id: int | None = Query(default=None, description="Pangolin staff only: one client's keys"),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=25, ge=1, le=100),
+    caller: Caller = Depends(current_caller),
     db: Session = Depends(get_session),
-) -> list[ApiKeyResponse]:
-    """Every key on this account, including the spent ones, so an owner can see
-    what exists and what it has been doing."""
-    keys = db.scalars(
-        select(ApiKey).where(ApiKey.account_id == account.id).order_by(ApiKey.created_at.desc())
-    ).all()
-    return [ApiKeyResponse(**_as_response(key)) for key in keys]
+) -> ConsoleApiKeyList:
+    """Keys newest first, including the spent ones, with a count per state. A
+    client gets its own, so it can see what exists and what each has been doing;
+    Pangolin staff get every client's."""
+    keys = api_key_list(db, q=q, state=state, client_id=caller.scope_for(client_id), page=page, page_size=page_size)
+    if not caller.staff:
+        for row in keys.items:
+            if row.last_action is not None:
+                # Pangolin suspended or resumed it; which staff member did is not the client's.
+                row.last_action.by = "Pangolin compliance"
+    return keys
 
 
 @router.delete("/{key_id}", response_model=ApiKeyResponse)
@@ -93,6 +117,7 @@ def revoke_key(
         raise HTTPException(status.HTTP_404_NOT_FOUND, "No such key on this account")
     if key.revoked_at is None:
         key.revoked_at = datetime.now(UTC)
+        _record(db, account, "revoked", key)
         db.commit()
         db.refresh(key)
     return ApiKeyResponse(**_as_response(key))

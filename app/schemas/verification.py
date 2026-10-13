@@ -10,6 +10,7 @@ from datetime import date, datetime
 from pydantic import BaseModel, EmailStr, Field, model_validator
 
 from app.core.config import settings
+from app.schemas.console import ConsoleApplicant, ConsoleCheck, ConsoleClient, ConsoleDocument, ConsoleFile, ConsoleReviewEvent
 from app.screening.yente import ScreeningResult
 
 
@@ -91,6 +92,33 @@ class VerificationResponse(BaseModel):
     expires_at: datetime | None
     created_at: datetime
     completed_at: datetime | None
+
+
+class DetailStep(StepResponse):
+    """A step with the checks it ran, for whoever reads a verification in full."""
+
+    checks: list[ConsoleCheck] = []
+    match_score: float | None = None
+    match_threshold: float | None = None
+
+
+class VerificationDetailResponse(VerificationResponse):
+    """One verification in full, for GET /v1/verifications/{reference}: the
+    response clients have always had, with what was read from the document,
+    every file captured, and who it is for alongside. Every field of
+    VerificationResponse is still here and means the same."""
+
+    id: str
+    document_type: str | None
+    client: ConsoleClient
+    applicant: ConsoleApplicant
+    started_at: datetime | None
+    steps: list[DetailStep]
+    document: ConsoleDocument | None
+    files: list[str]
+    evidence: list[ConsoleFile]
+    # Decisions Pangolin's compliance team made on it, oldest first.
+    reviews: list[ConsoleReviewEvent] = []
 
 
 class SessionResponse(BaseModel):

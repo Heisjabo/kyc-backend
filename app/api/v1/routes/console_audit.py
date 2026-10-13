@@ -109,6 +109,13 @@ def audit_events(
     staff_ids = {int(e.actor) for e in events if e.actor.isdigit()}
     staff = {a.id: a for a in db.scalars(select(Account).where(Account.id.in_(staff_ids)))} if staff_ids else {}
 
+    verification_ids = {e.verification_id for e in events if e.verification_id}
+    references = (
+        dict(db.execute(select(Verification.id, Verification.reference).where(Verification.id.in_(verification_ids))).all())
+        if verification_ids
+        else {}
+    )
+
     def who(event: AuditEvent) -> Account | None:
         return staff.get(int(event.actor)) if event.actor.isdigit() else None
 
@@ -124,6 +131,7 @@ def audit_events(
                 actor_name="Pangolin compliance",
                 actor_email=None,
                 verification_id=str(e.verification_id) if e.verification_id else None,
+                verification_reference=references.get(e.verification_id),
                 payload=payload,
                 created_at=e.created_at,
             )
@@ -134,6 +142,7 @@ def audit_events(
             actor_name=(f"{a.first_name} {a.last_name}".strip() or None) if (a := who(e)) else None,
             actor_email=a.email if (a := who(e)) else e.payload.get("by"),
             verification_id=str(e.verification_id) if e.verification_id else None,
+            verification_reference=references.get(e.verification_id),
             payload=e.payload,
             created_at=e.created_at,
         )

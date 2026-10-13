@@ -10,12 +10,15 @@ Two audiences, two kinds of access:
     which is what lets them carry on from their phone.
 """
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from datetime import date
+
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.api.deps import account_from_api_key
+from app.api.deps import Caller, account_from_api_key, current_caller
+from app.api.v1.routes import console_verifications as views
 from app.db.models import (
     Account,
     FileKind,
@@ -25,7 +28,10 @@ from app.db.models import (
     VerificationStep,
 )
 from app.db.session import get_session
+from app.schemas.console import ConsoleVerificationList
 from app.schemas.verification import (
+    DetailStep,
+    VerificationDetailResponse,
     CreateVerificationRequest,
     SessionResponse,
     StepResponse,
@@ -173,17 +179,81 @@ def create_verification(
     return _as_response(verification)
 
 
-@router.get("/verifications/{reference}", response_model=VerificationResponse)
-def read_verification(
-    reference: str,
-    account: Account = Depends(account_from_api_key),
-    db: Session = Depends(get_session),
-) -> VerificationResponse:
-    """How one of this client's customers got on."""
-    verification = service.by_reference(db, account.id, reference)
+# Who reads a verification by reference: the client it belongs to (its API key or
+# its dashboard session), or Pangolin staff naming the client, since a reference
+# is only unique within one client.
+_CLIENT_ID = Query(default=None, description="Pangolin staff only: the client the reference belongs to")
+PANGOLIN = "Pangolin compliance"
+
+
+def _find(db: Session, caller: Caller, reference: str, client_id: int | None) -> Verification:
+    account_id = caller.scope_for(client_id)
+    if account_id is None:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Give client_id: a reference is only unique within one client")
+    verification = service.by_reference(db, account_id, reference)
     if verification is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "No verification with that reference")
-    return _as_response(service.expire_if_due(db, verification))
+    return verification
+
+
+@router.get("/verifications", response_model=ConsoleVerificationList)
+def list_verifications(
+    status_: str | None = Query(default=None, alias="status", description="pending, in_progress, passed, failed, needs_review or expired"),
+    q: str | None = Query(default=None, max_length=120, description="Reference, applicant name, email or customer id"),
+    created_from: date | None = Query(default=None, description="Created on or after this day (UTC)"),
+    created_to: date | None = Query(default=None, description="Created on or before this day (UTC)"),
+    client_id: int | None = Query(default=None, description="Pangolin staff only: one client's verifications"),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=25, ge=1, le=100),
+    caller: Caller = Depends(current_caller),
+    db: Session = Depends(get_session),
+) -> ConsoleVerificationList:
+    """Verifications newest first, with a count per status. A client gets its own;
+    Pangolin staff get every client's."""
+    return views.verification_list(
+        db,
+        status_=status_,
+        client_id=caller.scope_for(client_id),
+        q=q,
+        created_from=created_from,
+        created_to=created_to,
+        page=page,
+        page_size=page_size,
+    )
+
+
+@router.get("/verifications/{reference}", response_model=VerificationDetailResponse)
+def read_verification(
+    reference: str,
+    client_id: int | None = _CLIENT_ID,
+    caller: Caller = Depends(current_caller),
+    db: Session = Depends(get_session),
+) -> VerificationDetailResponse:
+    """How one customer got on, in full: every field this endpoint has always
+    returned, with what was read from the document, the checks each step ran and
+    every file captured."""
+    verification = service.expire_if_due(db, _find(db, caller, reference, client_id))
+    base = _as_response(verification)
+    full = views.verification_detail(db, verification)
+    extracted = {step.step: step.extracted for step in base.steps}
+    reviews = full.reviews or []
+    if not caller.staff:
+        # What was decided is the client's to see; which staff member decided it is not.
+        for review in reviews:
+            review.by = PANGOLIN
+    return VerificationDetailResponse(
+        **base.model_dump(exclude={"steps"}),
+        id=full.id,
+        document_type=full.document_type,
+        client=full.client,
+        applicant=full.applicant,
+        started_at=full.started_at,
+        steps=[DetailStep(**step.model_dump(), extracted=extracted.get(step.step, {})) for step in full.steps],
+        document=full.document,
+        files=full.files,
+        evidence=full.evidence,
+        reviews=reviews,
+    )
 
 
 _KIND_ALIASES = {
@@ -201,13 +271,12 @@ _KIND_ALIASES = {
 def read_verification_file(
     reference: str,
     kind: str,
-    account: Account = Depends(account_from_api_key),
+    client_id: int | None = _CLIENT_ID,
+    caller: Caller = Depends(current_caller),
     db: Session = Depends(get_session),
 ):
     """Fetch the raw image for a verified document or selfie."""
-    verification = service.by_reference(db, account.id, reference)
-    if verification is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "No verification with that reference")
+    verification = _find(db, caller, reference, client_id)
 
     file_kind = _KIND_ALIASES.get(kind.lower())
     if file_kind is None:
@@ -240,7 +309,8 @@ def read_verification_file(
 )
 def read_verification_report(
     reference: str,
-    account: Account = Depends(account_from_api_key),
+    client_id: int | None = _CLIENT_ID,
+    caller: Caller = Depends(current_caller),
     db: Session = Depends(get_session),
 ) -> Response:
     """The verification report, as a PDF: what Shufti calls the verification proof.
@@ -249,9 +319,7 @@ def read_verification_report(
     any status: a declined or unfinished verification reads that way, with its
     reasons and the steps nobody reached. Asking for it writes nothing.
     """
-    verification = service.by_reference(db, account.id, reference)
-    if verification is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "No verification with that reference")
+    verification = _find(db, caller, reference, client_id)
     return Response(
         content=report.build(db, verification),
         media_type="application/pdf",
@@ -262,13 +330,12 @@ def read_verification_report(
 @router.get("/verifications/{reference}/files")
 def list_verification_files(
     reference: str,
-    account: Account = Depends(account_from_api_key),
+    client_id: int | None = _CLIENT_ID,
+    caller: Caller = Depends(current_caller),
     db: Session = Depends(get_session),
 ):
     """List all available evidence files for a verification."""
-    verification = service.by_reference(db, account.id, reference)
-    if verification is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "No verification with that reference")
+    verification = _find(db, caller, reference, client_id)
 
     files = db.scalars(
         select(VerificationFile)
@@ -280,6 +347,31 @@ def list_verification_files(
         f.kind.value: f"/v1/verifications/{reference}/files/{f.kind.value}"
         for f in files
     }
+
+
+@router.get("/verifications/{reference}/evidence/{file_id}")
+def read_evidence(
+    reference: str,
+    file_id: int,
+    client_id: int | None = _CLIENT_ID,
+    caller: Caller = Depends(current_caller),
+    db: Session = Depends(get_session),
+) -> Response:
+    """One captured file by its id, as listed in the verification's `evidence`:
+    retakes included, where files/{kind} gives only the latest of a kind."""
+    return views.evidence_response(db, _find(db, caller, reference, client_id).id, file_id)
+
+
+@router.get("/verifications/{reference}/evidence/{file_id}/thumbnail")
+def read_evidence_thumbnail(
+    reference: str,
+    file_id: int,
+    client_id: int | None = _CLIENT_ID,
+    caller: Caller = Depends(current_caller),
+    db: Session = Depends(get_session),
+) -> Response:
+    """A still JPEG from a captured video, for showing it before it is played."""
+    return views.thumbnail_response(db, _find(db, caller, reference, client_id).id, file_id)
 
 
 @router.get("/sessions/{token}/document-portrait")
