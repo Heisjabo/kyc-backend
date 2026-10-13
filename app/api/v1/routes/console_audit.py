@@ -10,11 +10,11 @@ holds the names people searched for and the addresses staff signed in from.
 from datetime import date, datetime, time, timedelta, timezone
 
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import String, cast, func, or_, select
+from sqlalchemy import String, and_, cast, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.api.deps import console_role
-from app.db.models import Account, AuditEvent
+from app.db.models import Account, AuditEvent, Verification
 from app.db.session import get_session
 from app.schemas.console import ConsoleAuditEvent, ConsoleAuditEventList
 
@@ -43,7 +43,48 @@ def list_audit_events(
     db: Session = Depends(get_session),
 ) -> ConsoleAuditEventList:
     """Every recorded event, newest first."""
+    return audit_events(
+        db,
+        category=category,
+        actor=actor,
+        q=q,
+        created_from=created_from,
+        created_to=created_to,
+        page=page,
+        page_size=page_size,
+    )
+
+
+def audit_events(
+    db: Session,
+    *,
+    category: str | None,
+    actor: str | None,
+    q: str | None,
+    created_from: date | None,
+    created_to: date | None,
+    page: int,
+    page_size: int,
+    account_id: int | None = None,
+) -> ConsoleAuditEventList:
+    """The audit log, whole or for one client account (the client dashboard's API
+    logs). For an account that is what the account did itself, signed in to the
+    dashboard or with one of its API keys, and what happened on its own
+    verifications, without anything Pangolin staff did there except their review
+    decisions, and without saying which staff member it was."""
     filters = []
+    if account_id is not None:
+        own = str(account_id)
+        mine = select(Verification.id).where(Verification.account_id == account_id)
+        filters.append(
+            or_(
+                AuditEvent.actor == own,
+                and_(
+                    AuditEvent.verification_id.in_(mine),
+                    or_(~AuditEvent.actor.op("~")("^[0-9]+$"), AuditEvent.event_type.startswith("review.")),
+                ),
+            )
+        )
     if actor:
         filters.append(AuditEvent.actor == actor)
     if created_from is not None:
@@ -71,20 +112,34 @@ def list_audit_events(
     def who(event: AuditEvent) -> Account | None:
         return staff.get(int(event.actor)) if event.actor.isdigit() else None
 
-    return ConsoleAuditEventList(
-        items=[
-            ConsoleAuditEvent(
+    def shown(e: AuditEvent) -> ConsoleAuditEvent:
+        if account_id is not None and e.actor.isdigit() and e.actor != str(account_id):
+            # A review decision by Pangolin staff, on the client's verification: what was
+            # decided is the client's to see, which staff member decided it is not.
+            payload = {k: v for k, v in e.payload.items() if k not in ("by", "ip", "user_agent")}
+            return ConsoleAuditEvent(
                 id=str(e.id),
                 event_type=e.event_type,
-                actor=e.actor,
-                actor_name=(f"{a.first_name} {a.last_name}".strip() or None) if (a := who(e)) else None,
-                actor_email=a.email if (a := who(e)) else e.payload.get("by"),
+                actor="pangolin",
+                actor_name="Pangolin compliance",
+                actor_email=None,
                 verification_id=str(e.verification_id) if e.verification_id else None,
-                payload=e.payload,
+                payload=payload,
                 created_at=e.created_at,
             )
-            for e in events
-        ],
+        return ConsoleAuditEvent(
+            id=str(e.id),
+            event_type=e.event_type,
+            actor=e.actor,
+            actor_name=(f"{a.first_name} {a.last_name}".strip() or None) if (a := who(e)) else None,
+            actor_email=a.email if (a := who(e)) else e.payload.get("by"),
+            verification_id=str(e.verification_id) if e.verification_id else None,
+            payload=e.payload,
+            created_at=e.created_at,
+        )
+
+    return ConsoleAuditEventList(
+        items=[shown(e) for e in events],
         total=total,
         page=page,
         page_size=page_size,

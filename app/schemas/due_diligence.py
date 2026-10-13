@@ -138,6 +138,22 @@ class FormResponse(BaseModel):
     updated_at: datetime
 
 
+class DashboardForm(BaseModel):
+    """A form as the client dashboard shows it: one the account has been given,
+    with how many times its own applicants have answered it."""
+
+    id: str
+    name: str
+    description: str | None
+    status: str
+    fields: list[FormField]
+    # Only the account itself: which other clients share a form is not theirs to see.
+    clients: list[FormClient]
+    responses: int = 0
+    created_at: datetime
+    updated_at: datetime
+
+
 class ClientForm(BaseModel):
     """A form as a client sees it: enough to choose a form_id."""
 

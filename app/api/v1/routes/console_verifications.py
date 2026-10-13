@@ -137,6 +137,31 @@ def list_verifications(
     db: Session = Depends(get_session),
 ) -> ConsoleVerificationList:
     """Every client's verifications, newest first."""
+    return verification_list(
+        db,
+        status_=status_,
+        client_id=client_id,
+        q=q,
+        created_from=created_from,
+        created_to=created_to,
+        page=page,
+        page_size=page_size,
+    )
+
+
+def verification_list(
+    db: Session,
+    *,
+    status_: str | None,
+    client_id: int | None,
+    q: str | None,
+    created_from: date | None,
+    created_to: date | None,
+    page: int,
+    page_size: int,
+) -> ConsoleVerificationList:
+    """Verifications newest first, of every client or only of `client_id`. Shared
+    with the client dashboard, which always passes its own account."""
     if status_ is not None and status_ not in _STATUSES:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Status must be one of " + ", ".join(_STATUSES))
 
@@ -202,6 +227,12 @@ def read_verification(
     verification = db.get(Verification, verification_id)
     if verification is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "No verification with that id")
+    return verification_detail(db, verification)
+
+
+def verification_detail(db: Session, verification: Verification) -> ConsoleVerificationDetail:
+    """One verification in full. Shared with the client dashboard, which checks the
+    verification is the account's own before asking."""
     # The same as the client API does when a verification is looked at.
     verification = service.expire_if_due(db, verification)
 
@@ -298,6 +329,11 @@ def read_verification_report(
     verification = db.get(Verification, verification_id)
     if verification is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "No such verification")
+    return report_response(db, verification)
+
+
+def report_response(db: Session, verification: Verification) -> Response:
+    """The verification report as a PDF download."""
     return Response(
         content=report.build(db, verification),
         media_type="application/pdf",
@@ -327,6 +363,11 @@ def read_evidence_file(
     db: Session = Depends(get_session),
 ) -> Response:
     """One captured file, as it was stored: an image, a proof of address or a video."""
+    return evidence_response(db, verification_id, file_id)
+
+
+def evidence_response(db: Session, verification_id: int, file_id: int) -> Response:
+    """One file of this verification, as stored. Shared with the client dashboard."""
     file = _evidence_file(db, verification_id, file_id)
     data = evidence_store.read(file.storage_key)
     if data is None:
@@ -387,6 +428,11 @@ def read_evidence_thumbnail(
     db: Session = Depends(get_session),
 ) -> Response:
     """A still JPEG from a captured video, for showing it before it is played."""
+    return thumbnail_response(db, verification_id, file_id)
+
+
+def thumbnail_response(db: Session, verification_id: int, file_id: int) -> Response:
+    """A still from one video of this verification. Shared with the client dashboard."""
     file = _evidence_file(db, verification_id, file_id)
     if not file.content_type.startswith("video/"):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Only videos have a thumbnail")

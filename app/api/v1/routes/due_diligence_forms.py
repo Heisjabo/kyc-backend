@@ -234,11 +234,21 @@ def list_responses(
     db: Session = Depends(get_session),
 ) -> ResponseList:
     """Submitted forms, newest first, across every client."""
+    return response_list(db, form_id=form_id, limit=limit, offset=offset)
+
+
+def response_list(
+    db: Session, *, form_id: str | None, limit: int, offset: int, account_id: int | None = None
+) -> ResponseList:
+    """Submitted forms newest first, of every client or only on one account's own
+    verifications (the client dashboard)."""
     query = (
         select(Step, Verification)
         .join(Verification, Verification.id == Step.verification_id)
         .where(Step.step == VerificationStep.due_diligence, Step.completed_at.is_not(None))
     )
+    if account_id is not None:
+        query = query.where(Verification.account_id == account_id)
     if form_id:
         query = query.where(Verification.form_id == form_id)
 

@@ -502,6 +502,8 @@ class ConsoleAnalyticsMetrics(BaseModel):
     clients: list[ConsoleMetricCount]
     # mobile, desktop: from the browser that sent the document and face steps.
     devices: list[ConsoleMetricCount]
+    # The client dashboard only: how often each step was asked for, with its pass rate.
+    services: list[ConsoleMetricCount] | None = None
 
 
 # Review decisions: what staff do with a verification the checks could not decide.

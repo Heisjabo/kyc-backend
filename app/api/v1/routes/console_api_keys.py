@@ -110,6 +110,14 @@ def list_api_keys(
     db: Session = Depends(get_session),
 ) -> ConsoleApiKeyList:
     """Every client's keys, newest first."""
+    return api_key_list(db, q=q, state=state, client_id=client_id, page=page, page_size=page_size)
+
+
+def api_key_list(
+    db: Session, *, q: str | None, state: str | None, client_id: int | None, page: int, page_size: int
+) -> ConsoleApiKeyList:
+    """Keys newest first, of every client or only of `client_id`. Shared with the
+    client dashboard, which always passes its own account."""
     if state is not None and state not in _STATES:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "State must be one of " + ", ".join(_STATES))
 
