@@ -65,8 +65,8 @@ def db_session():
     with admin.connect() as connection:
         connection.execute(text(f'CREATE SCHEMA "{schema}"'))
 
-    tables = [Account.__table__, ApiKey.__table__, PasswordReset.__table__]
-    Base.metadata.create_all(engine, tables=tables)
+    # Every table: making or revoking a key is also written to audit_events.
+    Base.metadata.create_all(engine)
     session = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)()
     try:
         yield session
@@ -341,8 +341,8 @@ def test_keys_are_listed_only_to_their_owner(client):
     mine = signed_in(client)
     make_key(client, mine)
     theirs = register(client, email="other@tuesday.africa", first_name="Other").json()["access_token"]
-    assert len(client.get("/v1/api-keys", headers=auth(mine)).json()) == 1
-    assert client.get("/v1/api-keys", headers=auth(theirs)).json() == []
+    assert client.get("/v1/api-keys", headers=auth(mine)).json()["total"] == 1
+    assert client.get("/v1/api-keys", headers=auth(theirs)).json()["items"] == []
 
 
 def test_managing_keys_needs_a_session(client):

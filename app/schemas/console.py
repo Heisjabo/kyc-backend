@@ -409,6 +409,8 @@ class ConsoleAuditEvent(BaseModel):
     actor_name: str | None
     actor_email: str | None
     verification_id: str | None
+    # The client's own reference for that verification, which is how a client addresses it.
+    verification_reference: str | None = None
     payload: dict
     created_at: datetime
 
@@ -502,6 +504,8 @@ class ConsoleAnalyticsMetrics(BaseModel):
     clients: list[ConsoleMetricCount]
     # mobile, desktop: from the browser that sent the document and face steps.
     devices: list[ConsoleMetricCount]
+    # The client dashboard only: how often each step was asked for, with its pass rate.
+    services: list[ConsoleMetricCount] | None = None
 
 
 # Review decisions: what staff do with a verification the checks could not decide.

@@ -11,8 +11,14 @@ Three ways in, for three different callers:
     still has a console role.
 
 All three end at an Account, so anything they reach can be written the same way.
+
+Endpoints that every caller shares take `current_caller`, which accepts any of
+the three and says how far the caller may see: a client, through the dashboard
+or an API key, sees only its own account's data; Pangolin staff with Pangolin
+KYC in their console products see every account's.
 """
 
+from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from fastapi import Depends, Header, HTTPException, Request, status
@@ -167,3 +173,55 @@ def _as_id(value) -> int | None:
         return int(value)
     except (TypeError, ValueError):
         return None
+
+
+@dataclass(frozen=True)
+class Caller:
+    """Who is asking, and how much they may see."""
+
+    account: Account
+    staff: bool
+
+    @property
+    def scope(self) -> int | None:
+        """The one account whose data this caller may see, or None for Pangolin
+        staff, who see every account's."""
+        return None if self.staff else self.account.id
+
+    def scope_for(self, client_id: int | None) -> int | None:
+        """The account to filter by: a client always gets its own, whatever it asks
+        for; staff get the client they asked for, or every client."""
+        return client_id if self.staff else self.account.id
+
+
+def current_caller(
+    request: Request,
+    credentials: HTTPAuthorizationCredentials | None = Depends(_bearer),
+    x_api_key: str | None = Header(default=None, alias=_API_KEY_HEADER),
+    db: Session = Depends(get_session),
+) -> Caller:
+    """A client signed in to the dashboard, a client's API key, or Pangolin staff
+    signed in to the console. A bearer token is tried as a console token first:
+    the two kinds of token are signed apart, so neither passes for the other."""
+    if credentials is not None:
+        if security.read_console_token(credentials.credentials) is not None:
+            staff = current_console_account(request, credentials, db)
+            if "kyc" not in (staff.console_products or []):
+                raise HTTPException(status.HTTP_403_FORBIDDEN, "This account cannot open that product")
+            return Caller(account=staff, staff=True)
+        return Caller(account=current_account(request, credentials, db), staff=False)
+    if x_api_key:
+        return Caller(account=account_from_api_key(request, x_api_key, db), staff=False)
+    raise HTTPException(
+        status.HTTP_401_UNAUTHORIZED,
+        "Sign in first",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+
+
+def current_client(caller: Caller = Depends(current_caller)) -> Account:
+    """Like current_caller, for what only a client account does for itself, such
+    as making its own API keys. Staff have the console for theirs."""
+    if caller.staff:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "This is for client accounts; staff use the console")
+    return caller.account

@@ -277,6 +277,24 @@ def list_results(
 ) -> ConsoleAmlEntryList:
     """Console searches and verification screenings that found something or could
     not screen, newest first, in one list."""
+    return aml_results(db, source=source, outcome=outcome, q=q, page=page, page_size=page_size)
+
+
+def aml_results(
+    db: Session,
+    *,
+    source: str | None,
+    outcome: str | None,
+    q: str | None,
+    page: int,
+    page_size: int,
+    account_id: int | None = None,
+) -> ConsoleAmlEntryList:
+    """The AML list. For one client account (the client dashboard) it holds only
+    the screenings of that account's own verifications: staff searches are
+    Pangolin's, not the client's."""
+    if account_id is not None:
+        source = "verification"
     if source is not None and source not in SOURCES:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Source must be manual or verification")
     if outcome is not None and outcome not in OUTCOMES:
@@ -305,6 +323,8 @@ def list_results(
     step_outcome = Step.result["outcome"].astext
     step_at = func.coalesce(Step.completed_at, Step.created_at)
     step_filters = [step_outcome != "no_match"]
+    if account_id is not None:
+        step_filters.append(Verification.account_id == account_id)
     if like:
         step_filters.append(
             or_(

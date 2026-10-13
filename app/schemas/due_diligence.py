@@ -145,6 +145,11 @@ class ClientForm(BaseModel):
     name: str
     description: str | None
     fields: list[FormField]
+    status: str = "active"
+    # Answers given to it on the caller's verifications (every client's, for staff).
+    responses: int = 0
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
 
 
 class SessionForm(BaseModel):

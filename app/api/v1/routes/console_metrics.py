@@ -52,8 +52,10 @@ def _start(day: date) -> datetime:
     return datetime.combine(day, time.min, tzinfo=timezone.utc)
 
 
-def _window(start: date, end: date):
-    return and_(Verification.created_at >= _start(start), Verification.created_at < _start(end + timedelta(days=1)))
+def _window(start: date, end: date, account_id: int | None = None):
+    """Verifications created in the window, of one client account when one is given."""
+    created = and_(Verification.created_at >= _start(start), Verification.created_at < _start(end + timedelta(days=1)))
+    return created if account_id is None else and_(created, Verification.account_id == account_id)
 
 
 def _rate(part: int, whole: int) -> float | None:
@@ -73,9 +75,9 @@ def _range(start: date | None, end: date | None) -> tuple[date, date, int, date,
     return start, end, days, previous_end - timedelta(days=days - 1), previous_end
 
 
-def _status_counts(db: Session, start: date, end: date) -> dict[str, int]:
+def _status_counts(db: Session, start: date, end: date, account_id: int | None = None) -> dict[str, int]:
     rows = db.execute(
-        select(_EFFECTIVE_STATUS.label("s"), func.count()).where(_window(start, end)).group_by("s")
+        select(_EFFECTIVE_STATUS.label("s"), func.count()).where(_window(start, end, account_id)).group_by("s")
     ).all()
     return {row[0]: row[1] for row in rows}
 
@@ -84,11 +86,11 @@ def _pass_rate(counts: dict[str, int]) -> float | None:
     return _rate(counts.get(_PASSED, 0), counts.get(_PASSED, 0) + counts.get(_FAILED, 0))
 
 
-def _median_completion(db: Session, start: date, end: date) -> float | None:
+def _median_completion(db: Session, start: date, end: date, account_id: int | None = None) -> float | None:
     seconds = func.extract("epoch", Verification.completed_at - func.coalesce(Verification.started_at, Verification.created_at))
     value = db.scalar(
         select(func.percentile_cont(0.5).within_group(seconds)).where(
-            _window(start, end),
+            _window(start, end, account_id),
             Verification.completed_at.is_not(None),
             Verification.status.in_([VerificationStatus(s) for s in _DECIDED]),
         )
@@ -96,12 +98,12 @@ def _median_completion(db: Session, start: date, end: date) -> float | None:
     return float(value) if value is not None else None
 
 
-def _attempts_per_step(db: Session, start: date, end: date) -> float | None:
+def _attempts_per_step(db: Session, start: date, end: date, account_id: int | None = None) -> float | None:
     """Rows in verification_steps per (verification, step) taken: retakes push it above 1."""
     taken = (
         select(func.max(Step.attempt).label("attempts"))
         .join(Verification, Verification.id == Step.verification_id)
-        .where(_window(start, end), Step.status != StepStatus.pending, Step.status != StepStatus.skipped)
+        .where(_window(start, end, account_id), Step.status != StepStatus.pending, Step.status != StepStatus.skipped)
         .group_by(Step.verification_id, Step.step)
         .subquery()
     )
@@ -109,7 +111,7 @@ def _attempts_per_step(db: Session, start: date, end: date) -> float | None:
     return float(value) if value is not None else None
 
 
-def _series(db: Session, start: date, end: date, days: int) -> ConsoleMetricSeries:
+def _series(db: Session, start: date, end: date, days: int, account_id: int | None = None) -> ConsoleMetricSeries:
     day = func.date(func.timezone("UTC", Verification.created_at))
     rows = db.execute(
         select(
@@ -118,7 +120,7 @@ def _series(db: Session, start: date, end: date, days: int) -> ConsoleMetricSeri
             func.count().filter(_EFFECTIVE_STATUS == _PASSED),
             func.count().filter(_EFFECTIVE_STATUS == _FAILED),
         )
-        .where(_window(start, end))
+        .where(_window(start, end, account_id))
         .group_by("d")
     ).all()
     by_day = {row[0]: (row[1], row[2], row[3]) for row in rows}
@@ -136,7 +138,9 @@ def _series(db: Session, start: date, end: date, days: int) -> ConsoleMetricSeri
     return ConsoleMetricSeries(granularity="week" if weekly else "day", points=points)
 
 
-def _breakdown(db: Session, key, start: date, end: date, joins=(), limit: int | None = None) -> list[ConsoleMetricCount]:
+def _breakdown(
+    db: Session, key, start: date, end: date, joins=(), limit: int | None = None, account_id: int | None = None
+) -> list[ConsoleMetricCount]:
     """Verifications in the window grouped by `key`, most first, with each group's share and pass rate."""
     query = select(
         key.label("k"),
@@ -146,7 +150,7 @@ def _breakdown(db: Session, key, start: date, end: date, joins=(), limit: int | 
     ).select_from(Verification)
     for target, on in joins:
         query = query.outerjoin(target, on)
-    rows = db.execute(query.where(_window(start, end)).group_by("k").order_by(func.count().desc())).all()
+    rows = db.execute(query.where(_window(start, end, account_id)).group_by("k").order_by(func.count().desc())).all()
     total = sum(row[1] for row in rows)
     shown = rows[:limit] if limit else rows
     return [
@@ -168,12 +172,21 @@ def overview(
     db: Session = Depends(get_session),
 ) -> ConsoleOverviewMetrics:
     """Volume, pass rate, completion time, outcomes and decline reasons for the Overview page."""
-    start, end, days, before_start, before_end = _range(from_, to)
-    now, before = _status_counts(db, start, end), _status_counts(db, before_start, before_end)
+    return overview_metrics(db, from_, to)
 
+
+def overview_metrics(db: Session, from_: date | None, to: date | None, account_id: int | None = None) -> ConsoleOverviewMetrics:
+    """The Overview figures, across every client or for one account's verifications
+    only. Shared with the client dashboard, which always passes its own account."""
+    start, end, days, before_start, before_end = _range(from_, to)
+    now, before = _status_counts(db, start, end, account_id), _status_counts(db, before_start, before_end, account_id)
+
+    waiting_filters = [Verification.status == VerificationStatus.needs_review]
+    if account_id is not None:
+        waiting_filters.append(Verification.account_id == account_id)
     waiting = db.execute(
         select(func.count(), func.min(func.coalesce(Verification.completed_at, Verification.created_at))).where(
-            Verification.status == VerificationStatus.needs_review
+            *waiting_filters
         )
     ).one()
 
@@ -182,7 +195,7 @@ def overview(
         select(reason.c.value, func.count())
         .select_from(Verification)
         .join(reason, true())
-        .where(_window(start, end), _EFFECTIVE_STATUS == _FAILED)
+        .where(_window(start, end, account_id), _EFFECTIVE_STATUS == _FAILED)
         .group_by(reason.c.value)
         .order_by(func.count().desc())
         .limit(6)
@@ -194,10 +207,11 @@ def overview(
         verifications=ConsoleMetricValue(value=sum(now.values()), previous=sum(before.values())),
         pass_rate=ConsoleMetricValue(value=_pass_rate(now), previous=_pass_rate(before)),
         completion_seconds=ConsoleMetricValue(
-            value=_median_completion(db, start, end), previous=_median_completion(db, before_start, before_end)
+            value=_median_completion(db, start, end, account_id),
+            previous=_median_completion(db, before_start, before_end, account_id),
         ),
         awaiting_review=ConsoleAwaitingReview(count=waiting[0], oldest_at=waiting[1]),
-        series=_series(db, start, end, days),
+        series=_series(db, start, end, days, account_id),
         outcomes=[
             ConsoleMetricCount(key=s, count=now[s], share=_rate(now[s], sum(now.values())))
             for s in sorted(now, key=lambda s: order.index(s) if s in order else 99)
@@ -216,8 +230,15 @@ def analytics(
 ) -> ConsoleAnalyticsMetrics:
     """Completion, review and retake rates, and breakdowns by country, document,
     step, client and device, for the Analytics page."""
+    return analytics_metrics(db, from_, to)
+
+
+def analytics_metrics(db: Session, from_: date | None, to: date | None, account_id: int | None = None) -> ConsoleAnalyticsMetrics:
+    """The Analytics figures, across every client or for one account's
+    verifications only. For one account there is no breakdown by client, and
+    there is one by the steps it asked for instead."""
     start, end, days, before_start, before_end = _range(from_, to)
-    now, before = _status_counts(db, start, end), _status_counts(db, before_start, before_end)
+    now, before = _status_counts(db, start, end, account_id), _status_counts(db, before_start, before_end, account_id)
 
     def completion(counts: dict[str, int]) -> float | None:
         return _rate(sum(counts.get(s, 0) for s in _DECIDED), sum(counts.values()))
@@ -232,7 +253,9 @@ def analytics(
         .order_by(DocumentScan.verification_id, DocumentScan.created_at.desc())
         .subquery()
     )
-    documents = _breakdown(db, cast(scan.c.document_type, String), start, end, joins=[(scan, scan.c.verification_id == Verification.id)])
+    documents = _breakdown(
+        db, cast(scan.c.document_type, String), start, end, joins=[(scan, scan.c.verification_id == Verification.id)], account_id=account_id
+    )
     documents = [d for d in documents if d.key != "unknown"]
     with_document = sum(d.count for d in documents)
     for d in documents:
@@ -245,9 +268,10 @@ def analytics(
         end,
         joins=[(Applicant, Applicant.id == Verification.applicant_id)],
         limit=10,
+        account_id=account_id,
     )
 
-    clients = _breakdown(db, Verification.account_id, start, end, limit=10)
+    clients = _breakdown(db, Verification.account_id, start, end, limit=10) if account_id is None else []
     names = {
         a.id: (f"{a.first_name} {a.last_name}".strip() or a.email)
         for a in db.scalars(select(Account).where(Account.id.in_([int(c.key) for c in clients if c.key.isdigit()])))
@@ -259,7 +283,7 @@ def analytics(
     step_rows = db.execute(
         select(Step.step, func.percentile_cont(0.5).within_group(seconds), func.count())
         .join(Verification, Verification.id == Step.verification_id)
-        .where(_window(start, end), Step.started_at.is_not(None), Step.completed_at.is_not(None))
+        .where(_window(start, end, account_id), Step.started_at.is_not(None), Step.completed_at.is_not(None))
         .group_by(Step.step)
     ).all()
     step_order = [s.value for s in VerificationStep]
@@ -273,7 +297,7 @@ def analytics(
         select(Step.verification_id, Step.device["user_agent"].astext)
         .join(Verification, Verification.id == Step.verification_id)
         .where(
-            _window(start, end),
+            _window(start, end, account_id),
             Step.step.in_([VerificationStep.document, VerificationStep.face]),
             Step.device["user_agent"].astext.is_not(None),
         )
@@ -292,12 +316,39 @@ def analytics(
         completion_rate=ConsoleMetricValue(value=completion(now), previous=completion(before)),
         review_rate=ConsoleMetricValue(value=review(now), previous=review(before)),
         attempts_per_step=ConsoleMetricValue(
-            value=_attempts_per_step(db, start, end), previous=_attempts_per_step(db, before_start, before_end)
+            value=_attempts_per_step(db, start, end, account_id),
+            previous=_attempts_per_step(db, before_start, before_end, account_id),
         ),
-        series=_series(db, start, end, days),
+        series=_series(db, start, end, days, account_id),
         countries=countries,
         documents=documents,
         step_times=step_times,
         clients=clients,
         devices=devices,
+        services=_services(db, start, end, account_id) if account_id is not None else None,
     )
+
+
+def _services(db: Session, start: date, end: date, account_id: int) -> list[ConsoleMetricCount]:
+    """How often each step was asked for in the window, with that step's own pass
+    rate: passes out of passes and fails, retakes included."""
+    created = db.scalar(select(func.count()).select_from(Verification).where(_window(start, end, account_id))) or 0
+    out = []
+    for step in VerificationStep:
+        asked = db.scalar(
+            select(func.count())
+            .select_from(Verification)
+            .where(_window(start, end, account_id), Verification.services.contains([step.value]))
+        ) or 0
+        if not asked:
+            continue
+        passed, failed = db.execute(
+            select(
+                func.count().filter(Step.status == StepStatus.passed),
+                func.count().filter(Step.status == StepStatus.failed),
+            )
+            .join(Verification, Verification.id == Step.verification_id)
+            .where(_window(start, end, account_id), Step.step == step)
+        ).one()
+        out.append(ConsoleMetricCount(key=step.value, count=asked, share=_rate(asked, created), pass_rate=_rate(passed, passed + failed)))
+    return out
