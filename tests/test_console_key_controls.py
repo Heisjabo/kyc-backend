@@ -128,9 +128,10 @@ def test_suspended_keys_are_listed_and_counted_apart(client, db_session, acme):
 
     # A suspended key is not an active key on the client's page either.
     clients = client.get("/v1/console/clients", headers=auth(admin)).json()
-    assert clients["items"][0]["active_keys"] == 0
+    owner = next(c for c in clients["items"] if not c["role"])   # the client, not the staff account
+    assert owner["active_keys"] == 0
     assert clients["overview"]["active_keys"] == 0
-    detail = client.get(f"/v1/console/clients/{clients['items'][0]['id']}", headers=auth(admin)).json()
+    detail = client.get(f"/v1/console/clients/{owner['id']}", headers=auth(admin)).json()
     assert detail["api_keys"][0]["suspended_at"] is not None
 
 

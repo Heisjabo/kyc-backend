@@ -14,7 +14,7 @@ from sqlalchemy.orm import sessionmaker
 
 from app.core.config import settings
 from app.db.base import Base
-from app.db.models import Account, ApiKey, PasswordReset
+from app.db.models import Account, ApiKey, AuditEvent, PasswordReset
 from app.db.session import get_session
 from app.main import app
 from app.scripts.console_admin import (
@@ -67,7 +67,8 @@ def db_session():
     admin = create_engine(settings.DATABASE_URL, isolation_level="AUTOCOMMIT")
     with admin.connect() as connection:
         connection.execute(text(f'CREATE SCHEMA "{schema}"'))
-    Base.metadata.create_all(engine, tables=[Account.__table__, ApiKey.__table__, PasswordReset.__table__])
+    # Every table: signing in is written to audit_events, which points at the others.
+    Base.metadata.create_all(engine)
     session = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)()
     try:
         yield session
