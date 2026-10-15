@@ -26,6 +26,7 @@ import time
 from dataclasses import asdict
 from datetime import date
 
+from app.core.config import settings
 from app.engines.addresses import address_on_document, document_text, is_po_box
 from app.engines.fields import find_dates
 from app.engines.image import InvalidImageError, decode_image
@@ -125,10 +126,14 @@ def scan_address_proof(
     checks.append(_text_layer_agrees(claimed_address, lines, on_the_page, today))
     checks.append(_owner_check(names or [], lines))
     checks.append(_recency_check(lines, today, extracted))
+    # No tamper check exists. By default that means a person looks at every proof that
+    # would otherwise pass; see ADDRESS_PROOFS_NEED_REVIEW.
+    needs_review = settings.ADDRESS_PROOFS_NEED_REVIEW
     checks.append(
         CheckResult(
             name="address_document_authenticity",
-            status=CheckStatus.skipped,
+            status=CheckStatus.review if needs_review else CheckStatus.skipped,
+            reasons=["AUTHENTICITY_NOT_VERIFIED"] if needs_review else [],
             warnings=["AUTHENTICITY_NOT_CHECKED"],
         )
     )

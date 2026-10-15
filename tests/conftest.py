@@ -18,3 +18,11 @@ def _private_callbacks_allowed_unless_a_test_says_otherwise(monkeypatch):
     """The tests use made-up callback hosts that do not resolve. The tests in
     tests/test_callbacks.py switch the public-address rule back on."""
     monkeypatch.setattr(settings, "CALLBACK_ALLOW_PRIVATE_HOSTS", True)
+
+
+@pytest.fixture(autouse=True)
+def _address_review_off_except_where_a_test_asks(monkeypatch):
+    """Sending every address proof to a person is the default. Most address tests are
+    about the other checks, so they run without it; tests/test_address_review.py
+    turns it on."""
+    monkeypatch.setattr(settings, "ADDRESS_PROOFS_NEED_REVIEW", False)

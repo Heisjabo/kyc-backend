@@ -30,6 +30,13 @@ class Settings(BaseSettings):
     # localhost and private networks, which a developer's machine and the tests need.
     CALLBACK_ALLOW_PRIVATE_HOSTS: bool = False
 
+    # Nothing here can tell a forged bill or statement from a real one: a PDF made in a
+    # few seconds with a PDF library passes every other address check. Until there is a
+    # real authenticity check, a proof of address that would otherwise pass goes to a
+    # person (decision "review", reason AUTHENTICITY_NOT_VERIFIED). Set this to false
+    # only when something else checks the proof.
+    ADDRESS_PROOFS_NEED_REVIEW: bool = True
+
     # Base URL for session links (e.g. http://localhost:4501). If empty, request base_url is used.
     VERIFY_BASE_URL: str = ""
 
