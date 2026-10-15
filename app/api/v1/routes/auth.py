@@ -107,6 +107,23 @@ def login(body: LoginRequest, db: Session = Depends(get_session)) -> TokenRespon
     return _token_for(account, db)
 
 
+@router.get("/callback-secret")
+def callback_secret(account: Account = Depends(current_account)) -> dict:
+    """The key this account's callbacks are signed with.
+
+    Each callback carries X-KYC-Timestamp and X-KYC-Signature (sha256=<hex>), an
+    HMAC-SHA256 of "<timestamp>.<raw body>" under this key. Check it, and refuse a
+    timestamp more than a few minutes old.
+    """
+    return {
+        "secret": security.callback_secret(account.id),
+        "signature_header": "X-KYC-Signature",
+        "timestamp_header": "X-KYC-Timestamp",
+        "signed": "<timestamp>.<raw request body>",
+        "algorithm": "HMAC-SHA256, hex, prefixed sha256=",
+    }
+
+
 @router.get("/me", response_model=AccountResponse)
 def me(account: Account = Depends(current_account)) -> AccountResponse:
     return _as_response(account)

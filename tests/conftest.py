@@ -11,3 +11,10 @@ def _legacy_endpoints_on_for_the_legacy_tests(monkeypatch):
     switches them off again to prove they are hidden.
     """
     monkeypatch.setattr(settings, "ENABLE_LEGACY_ENDPOINTS", True)
+
+
+@pytest.fixture(autouse=True)
+def _private_callbacks_allowed_unless_a_test_says_otherwise(monkeypatch):
+    """The tests use made-up callback hosts that do not resolve. The tests in
+    tests/test_callbacks.py switch the public-address rule back on."""
+    monkeypatch.setattr(settings, "CALLBACK_ALLOW_PRIVATE_HOSTS", True)

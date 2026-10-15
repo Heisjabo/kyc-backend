@@ -7,8 +7,9 @@ client already integrated with them can point at us with almost no change.
 
 from datetime import date, datetime
 
-from pydantic import BaseModel, EmailStr, Field, model_validator
+from pydantic import BaseModel, EmailStr, Field, model_validator, field_validator
 
+from app.core import urls
 from app.core.config import settings
 from app.schemas.console import ConsoleApplicant, ConsoleCheck, ConsoleClient, ConsoleDocument, ConsoleFile, ConsoleReviewEvent
 from app.screening.yente import ScreeningResult
@@ -50,6 +51,18 @@ class CreateVerificationRequest(BaseModel):
     # time. ttl_days is the same setting for people who would rather say "7".
     ttl: int | None = Field(default=None, ge=1, description="Minutes the session stays open")
     ttl_days: int | None = Field(default=None, ge=1, le=30, description="Days the session stays open")
+
+    @field_validator("callback_url", "redirect_url")
+    @classmethod
+    def _safe_url(cls, value, info):
+        """Where we send data (callback) and where we send the person (redirect)."""
+        if value is None or value == "":
+            return None
+        check = urls.check_callback if info.field_name == "callback_url" else urls.check_redirect
+        try:
+            return check(value)
+        except urls.UnsafeUrl as problem:
+            raise ValueError(f"{info.field_name} {problem}") from None
 
     @model_validator(mode="after")
     def _one_ttl(self):

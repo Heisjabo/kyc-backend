@@ -385,13 +385,38 @@ def _fire_callback(db: Session, verification: Verification) -> None:
     }
 
     url = verification.callback_url
+    account_id = verification.account_id
+
     def _send():
+        import json
+        import logging
+        import time
+
+        import httpx
+
+        from app.core import security, urls
+
+        log = logging.getLogger(__name__)
         try:
-            import httpx
-            with httpx.Client(timeout=5.0) as client:
-                client.post(url, json=payload)
+            # Checked again now: the address can have been changed to point inside
+            # since the verification was made.
+            urls.check_callback(url)
+        except urls.UnsafeUrl as problem:
+            log.warning("Callback not sent for %s: %s", verification.reference, problem)
+            return
+        body = json.dumps(payload, separators=(",", ":"), sort_keys=True, default=str).encode()
+        timestamp = int(time.time())
+        headers = {
+            "Content-Type": "application/json",
+            "X-KYC-Timestamp": str(timestamp),
+            "X-KYC-Signature": security.sign_callback(account_id, body, timestamp),
+        }
+        try:
+            # No redirects: a 302 to an internal address would undo the check above.
+            with httpx.Client(timeout=5.0, follow_redirects=False, trust_env=False) as client:
+                client.post(url, content=body, headers=headers)
         except Exception as e:
-            print(f"[kyc-backend] Callback POST to {url} failed: {e}")
+            log.warning("Callback POST for %s failed: %s", verification.reference, e)
 
     import threading
     threading.Thread(target=_send, daemon=True).start()

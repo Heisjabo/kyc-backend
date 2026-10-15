@@ -26,6 +26,10 @@ class Settings(BaseSettings):
     # the personal details read from it. Off unless a developer turns it on.
     ENABLE_LEGACY_ENDPOINTS: bool = False
 
+    # A callback URL must resolve to public addresses only. Turn this on to allow
+    # localhost and private networks, which a developer's machine and the tests need.
+    CALLBACK_ALLOW_PRIVATE_HOSTS: bool = False
+
     # Base URL for session links (e.g. http://localhost:4501). If empty, request base_url is used.
     VERIFY_BASE_URL: str = ""
 

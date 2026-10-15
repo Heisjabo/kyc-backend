@@ -154,6 +154,27 @@ def same_secret(offered: str, stored: str) -> bool:
     return hmac.compare_digest(offered, stored)
 
 
+# Callback signatures
+#
+# Each account signs with a key of its own, derived from the server secret and the
+# account id, so a client can check that a callback came from us and one client
+# cannot forge a callback to another. The client reads its key from
+# GET /v1/auth/callback-secret.
+
+def callback_secret(account_id) -> str:
+    return hmac.new(
+        settings.JWT_SECRET.encode(), f"callback-v1:{account_id}".encode(), hashlib.sha256
+    ).hexdigest()
+
+
+def sign_callback(account_id, body: bytes, timestamp: int) -> str:
+    """sha256=<hex>, over "<timestamp>.<body>". The timestamp is sent too, so the
+    receiver can refuse an old copy."""
+    key = callback_secret(account_id).encode()
+    digest = hmac.new(key, f"{timestamp}.".encode() + body, hashlib.sha256).hexdigest()
+    return f"sha256={digest}"
+
+
 # Single-use tokens, for password resets
 
 def new_reset_token() -> tuple[str, str]:

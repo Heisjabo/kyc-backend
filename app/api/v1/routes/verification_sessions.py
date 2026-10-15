@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import Caller, account_from_api_key, current_caller
 from app.api.v1.routes import console_verifications as views
+from app.core import urls
 from app.db.models import (
     Account,
     FileKind,
@@ -432,5 +433,5 @@ def read_session(token: str, db: Session = Depends(get_session)) -> SessionRespo
         next_step=outstanding[0] if outstanding and verification.status.value != "needs_review" else None,
         completed_steps=done,
         expired=service.is_expired(verification),
-        redirect_url=verification.redirect_url,
+        redirect_url=urls.redirect_or_none(verification.redirect_url),
     )
