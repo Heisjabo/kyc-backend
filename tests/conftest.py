@@ -26,3 +26,15 @@ def _address_review_off_except_where_a_test_asks(monkeypatch):
     about the other checks, so they run without it; tests/test_address_review.py
     turns it on."""
     monkeypatch.setattr(settings, "ADDRESS_PROOFS_NEED_REVIEW", False)
+
+
+@pytest.fixture(autouse=True)
+def _rate_limits_off_except_where_a_test_asks(monkeypatch):
+    """The suite signs in and submits far more often than a person would. The tests in
+    tests/test_ratelimit.py switch the limits on."""
+    from app.core.ratelimit import limiter
+
+    monkeypatch.setattr(settings, "RATE_LIMITS_ENABLED", False)
+    limiter.reset()
+    yield
+    limiter.reset()

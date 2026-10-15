@@ -19,7 +19,7 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import Caller, account_from_api_key, current_caller
 from app.api.v1.routes import console_verifications as views
-from app.core import urls
+from app.core import ratelimit, urls
 from app.db.models import (
     Account,
     FileKind,
@@ -375,7 +375,7 @@ def read_evidence_thumbnail(
     return views.thumbnail_response(db, _find(db, caller, reference, client_id).id, file_id)
 
 
-@router.get("/sessions/{token}/document-portrait")
+@router.get("/sessions/{token}/document-portrait", dependencies=[ratelimit.limit("session-ip", 600, 60)])
 def session_document_portrait(token: str, db: Session = Depends(get_session)):
     """The face cut from the document this session already read.
 
@@ -403,7 +403,7 @@ def session_document_portrait(token: str, db: Session = Depends(get_session)):
     return Response(content=data, media_type=file.content_type)
 
 
-@router.get("/sessions/{token}", response_model=SessionResponse)
+@router.get("/sessions/{token}", response_model=SessionResponse, dependencies=[ratelimit.limit("session-ip", 600, 60)])
 def read_session(token: str, db: Session = Depends(get_session)) -> SessionResponse:
     """What the page in front of the person needs, and nothing more.
 

@@ -37,6 +37,10 @@ class Settings(BaseSettings):
     # only when something else checks the proof.
     ADDRESS_PROOFS_NEED_REVIEW: bool = True
 
+    # Limits on sign-in, registration, password resets and the session endpoints
+    # (app/core/ratelimit.py). Turn off only for load tests.
+    RATE_LIMITS_ENABLED: bool = True
+
     # Base URL for session links (e.g. http://localhost:4501). If empty, request base_url is used.
     VERIFY_BASE_URL: str = ""
 

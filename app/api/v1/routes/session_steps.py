@@ -16,6 +16,7 @@ import json
 import time
 
 import numpy as np
+from app.core import ratelimit
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -224,7 +225,11 @@ def _device(request: Request) -> dict:
     }
 
 
-@router.post("/{token}/device", status_code=status.HTTP_204_NO_CONTENT)
+@router.post(
+    "/{token}/device",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[ratelimit.limit("device-token", 30, 60, by="token")],
+)
 def report_device(token: str, signals: DeviceSignals, request: Request, db: Session = Depends(get_session)) -> None:
     """The browser describing itself, sent by the session page each time it opens.
 
@@ -236,7 +241,7 @@ def report_device(token: str, signals: DeviceSignals, request: Request, db: Sess
     network.record(db, verification, request, signals)
 
 
-@router.post("/{token}/document", response_model=DocumentCheckResponse)
+@router.post("/{token}/document", response_model=DocumentCheckResponse, dependencies=[ratelimit.limit("step-token", 20, 60, by="token"), ratelimit.limit("step-ip", 120, 60)])
 def submit_document(
     token: str,
     request: Request,
@@ -413,7 +418,7 @@ def _fill_applicant(db: Session, verification: Verification, extracted: dict) ->
     db.flush()
 
 
-@router.post("/{token}/address", response_model=AddressCheckResponse)
+@router.post("/{token}/address", response_model=AddressCheckResponse, dependencies=[ratelimit.limit("step-token", 20, 60, by="token"), ratelimit.limit("step-ip", 120, 60)])
 def submit_address(
     token: str,
     request: Request,
@@ -488,7 +493,7 @@ def submit_address(
     return result
 
 
-@router.post("/{token}/face", response_model=FaceVerificationResponse)
+@router.post("/{token}/face", response_model=FaceVerificationResponse, dependencies=[ratelimit.limit("step-token", 20, 60, by="token"), ratelimit.limit("step-ip", 120, 60)])
 def submit_face(
     token: str,
     request: Request,
@@ -683,7 +688,7 @@ def _session_form(db: Session, verification: Verification):
     return form
 
 
-@router.get("/{token}/due-diligence", response_model=SessionForm)
+@router.get("/{token}/due-diligence", response_model=SessionForm, dependencies=[ratelimit.limit("session-ip", 600, 60)])
 def read_due_diligence_form(token: str, db: Session = Depends(get_session)) -> SessionForm:
     """The questions this person is asked, as the client's form has them now.
 
@@ -705,7 +710,7 @@ def read_due_diligence_form(token: str, db: Session = Depends(get_session)) -> S
     )
 
 
-@router.post("/{token}/due-diligence", response_model=DueDiligenceResult)
+@router.post("/{token}/due-diligence", response_model=DueDiligenceResult, dependencies=[ratelimit.limit("step-token", 20, 60, by="token"), ratelimit.limit("step-ip", 120, 60)])
 async def submit_due_diligence(token: str, request: Request, db: Session = Depends(get_session)) -> DueDiligenceResult:
     """Answer the due diligence form.
 

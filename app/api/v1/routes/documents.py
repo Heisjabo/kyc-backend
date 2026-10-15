@@ -9,6 +9,7 @@ from app.rules import document as rules
 from app.schemas.document import Applicant, DocumentCheckResponse, DocumentFrameProbe, DocumentType
 
 from app.api.deps import legacy_only
+from app.core import ratelimit
 
 # /frame is not behind legacy_only: the live product's capture screen calls it several
 # times a second for camera guidance, and it returns only quality figures (blur, light,
@@ -67,7 +68,7 @@ def scan(
     return result
 
 
-@router.post("/frame", response_model=DocumentFrameProbe)
+@router.post("/frame", response_model=DocumentFrameProbe, dependencies=[ratelimit.limit("frame-ip", 900, 60)])
 def frame(
     frame: UploadFile = File(..., description="One camera frame, cropped to the guide rectangle"),
     side: str = Form("front", description='"front" or "back". A back carries no portrait, so that check is skipped.'),

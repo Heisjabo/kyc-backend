@@ -15,7 +15,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.api.deps import current_console_account
-from app.core import security
+from app.core import ratelimit, security
 from app.db.models import Account, AuditEvent
 from app.db.session import get_session
 from app.schemas.auth import LoginRequest
@@ -52,18 +52,23 @@ def _record(db: Session, request: Request, account: Account, event_type: str) ->
     db.commit()
 
 
-@router.post("/login", response_model=ConsoleTokenResponse)
+@router.post("/login", response_model=ConsoleTokenResponse, dependencies=[ratelimit.limit("console-login", 10, 60)])
 def login(body: LoginRequest, request: Request, db: Session = Depends(get_session)) -> ConsoleTokenResponse:
-    account = db.scalar(select(Account).where(Account.email == body.email.lower().strip()))
+    email = body.email.lower().strip()
+    ratelimit.check_sign_in_allowed(request, email)
+    account = db.scalar(select(Account).where(Account.email == email))
     # Verified even when there is no such account, so every refusal takes as long.
     stored = account.password_hash if account else security.hash_password("no such account")
     correct = security.verify_password(body.password, stored)
 
     if account is None or not account.console_role:
+        ratelimit.record_failed_sign_in(request, email)
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, _WRONG)
     if not correct:
+        ratelimit.record_failed_sign_in(request, email)
         _record(db, request, account, "console.sign_in_failed")
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, _WRONG)
+    ratelimit.clear_failed_sign_ins(request, email)
     if not account.is_active:
         _record(db, request, account, "console.sign_in_refused")
         raise HTTPException(status.HTTP_403_FORBIDDEN, "This account has been suspended")
