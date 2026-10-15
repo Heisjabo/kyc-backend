@@ -7,9 +7,10 @@ a browser before the real frontend is built.
 import io
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import FileResponse, HTMLResponse, Response
 
+from app.api.deps import legacy_only
 from app.storage import sessions
 
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
@@ -17,7 +18,7 @@ WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 router = APIRouter(include_in_schema=False)
 
 
-@router.get("/", response_class=HTMLResponse)
+@router.get("/", response_class=HTMLResponse, dependencies=[Depends(legacy_only)])
 def scan_page() -> HTMLResponse:
     return HTMLResponse((WEB_DIR / "scan.html").read_text())
 
@@ -81,13 +82,13 @@ def session_qr(token: str, request: Request) -> Response:
     )
 
 
-@router.get("/capture", response_class=HTMLResponse)
+@router.get("/capture", response_class=HTMLResponse, dependencies=[Depends(legacy_only)])
 def capture_page() -> HTMLResponse:
     """Guided document capture: the camera holds off until the card is readable."""
     return HTMLResponse((WEB_DIR / "capture.html").read_text())
 
 
-@router.get("/scratch-verify/{verification_id}", response_class=HTMLResponse)
+@router.get("/scratch-verify/{verification_id}", response_class=HTMLResponse, dependencies=[Depends(legacy_only)])
 def verify_page(verification_id: str) -> HTMLResponse:
     return HTMLResponse((WEB_DIR / "verify.html").read_text())
 
@@ -97,7 +98,7 @@ def stylesheet() -> FileResponse:
     return FileResponse(WEB_DIR / "style.css", media_type="text/css")
 
 
-@router.get("/api/session/{verification_id}")
+@router.get("/api/session/{verification_id}", dependencies=[Depends(legacy_only)])
 def session_summary(verification_id: str) -> dict:
     """What the face page shows about the document already scanned."""
     session = sessions.get(verification_id)

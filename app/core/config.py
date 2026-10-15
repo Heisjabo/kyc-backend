@@ -19,6 +19,13 @@ class Settings(BaseSettings):
     # something a browser attaches on its own.
     CORS_ORIGINS: str = "*"
 
+    # The first-generation endpoints and test pages: /v1/document/scan, /v1/document/frame,
+    # /v1/document/birth-certificate, /v1/face/liveness, /v1/face/frame,
+    # /v1/verifications/{id}/face, and the pages that drive them. They have no
+    # authentication: anyone who can reach them can upload an identity document and get
+    # the personal details read from it. Off unless a developer turns it on.
+    ENABLE_LEGACY_ENDPOINTS: bool = False
+
     # Base URL for session links (e.g. http://localhost:4501). If empty, request base_url is used.
     VERIFY_BASE_URL: str = ""
 

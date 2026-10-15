@@ -1,6 +1,6 @@
 from datetime import date
 
-from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile, status
+from fastapi import Depends, APIRouter, File, Form, HTTPException, Request, UploadFile, status
 
 from app.api.v1.routes.verifications import open_session
 from app.pipeline.document import scan_document
@@ -8,7 +8,9 @@ from app.pipeline.document_probe import probe_document_frame
 from app.rules import document as rules
 from app.schemas.document import Applicant, DocumentCheckResponse, DocumentFrameProbe, DocumentType
 
-router = APIRouter(prefix="/document")
+from app.api.deps import legacy_only
+
+router = APIRouter(prefix="/document", dependencies=[Depends(legacy_only)])
 
 
 def _read_upload(upload: UploadFile, field: str) -> bytes:

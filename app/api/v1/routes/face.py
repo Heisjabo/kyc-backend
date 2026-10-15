@@ -1,4 +1,4 @@
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
+from fastapi import Depends, APIRouter, File, Form, HTTPException, UploadFile, status
 
 from app.pipeline.frame_probe import probe_frame
 from app.pipeline.liveness import check_liveness
@@ -7,7 +7,9 @@ from app.rules import face as rules
 from app.schemas.face import FrameProbeResponse, LivenessResponse
 from app.storage import sessions
 
-router = APIRouter(prefix="/face")
+from app.api.deps import legacy_only
+
+router = APIRouter(prefix="/face", dependencies=[Depends(legacy_only)])
 
 
 # A plain `def`: FastAPI runs it in a worker thread, so face detection on a

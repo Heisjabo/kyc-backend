@@ -28,6 +28,7 @@ from sqlalchemy.orm import Session
 
 from app.api.request_audit import set_actor
 from app.core import security
+from app.core.config import settings
 from app.db.models import Account, ApiKey
 from app.db.session import get_session
 
@@ -225,3 +226,13 @@ def current_client(caller: Caller = Depends(current_caller)) -> Account:
     if caller.staff:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "This is for client accounts; staff use the console")
     return caller.account
+
+
+def legacy_only() -> None:
+    """Hide a first-generation endpoint unless ENABLE_LEGACY_ENDPOINTS is on.
+
+    These endpoints take no API key and no session token. Answering 404 rather than
+    401 says nothing about what exists at the address.
+    """
+    if not settings.ENABLE_LEGACY_ENDPOINTS:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Not found")
