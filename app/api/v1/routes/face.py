@@ -9,12 +9,14 @@ from app.storage import sessions
 
 from app.api.deps import legacy_only
 
-router = APIRouter(prefix="/face", dependencies=[Depends(legacy_only)])
+# /frame is not behind legacy_only: the live product calls it for head-pose guidance and
+# it returns only quality and pose numbers.
+router = APIRouter(prefix="/face")
 
 
 # A plain `def`: FastAPI runs it in a worker thread, so face detection on a
 # burst of frames doesn't block other requests.
-@router.post("/liveness", response_model=LivenessResponse)
+@router.post("/liveness", response_model=LivenessResponse, dependencies=[Depends(legacy_only)])
 def liveness(
     frames: list[UploadFile] = File(
         ...,

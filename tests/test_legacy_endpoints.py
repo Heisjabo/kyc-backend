@@ -11,10 +11,8 @@ client = TestClient(app)
 
 LEGACY = [
     ("post", "/v1/document/scan"),
-    ("post", "/v1/document/frame"),
     ("post", "/v1/document/birth-certificate"),
     ("post", "/v1/face/liveness"),
-    ("post", "/v1/face/frame"),
     ("post", "/v1/verifications/abc/face"),
     ("get", "/"),
     ("get", "/capture"),
@@ -48,3 +46,11 @@ def test_the_real_flow_does_not_need_them(monkeypatch):
     monkeypatch.setattr(settings, "ENABLE_LEGACY_ENDPOINTS", False)
     assert client.get("/v1/health").status_code == 200
     assert client.get("/v1/sessions/not-a-token").status_code == 404
+
+
+@pytest.mark.parametrize("path", ["/v1/document/frame", "/v1/face/frame"])
+def test_the_live_camera_guidance_endpoints_stay_available(monkeypatch, path):
+    """The customer-facing app calls these while the camera is open. They return
+    only quality figures, so they are not part of what is hidden."""
+    monkeypatch.setattr(settings, "ENABLE_LEGACY_ENDPOINTS", False)
+    assert client.post(path).status_code == 422   # reaches validation: no frame sent

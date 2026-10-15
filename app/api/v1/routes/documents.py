@@ -10,7 +10,10 @@ from app.schemas.document import Applicant, DocumentCheckResponse, DocumentFrame
 
 from app.api.deps import legacy_only
 
-router = APIRouter(prefix="/document", dependencies=[Depends(legacy_only)])
+# /frame is not behind legacy_only: the live product's capture screen calls it several
+# times a second for camera guidance, and it returns only quality figures (blur, light,
+# how much of the frame the card fills), never anything read from the document.
+router = APIRouter(prefix="/document")
 
 
 def _read_upload(upload: UploadFile, field: str) -> bytes:
@@ -29,7 +32,7 @@ def _read_upload(upload: UploadFile, field: str) -> bytes:
 
 # A plain `def` (not async): FastAPI runs it in a worker thread, so the
 # CPU-heavy OCR doesn't block other requests.
-@router.post("/scan", response_model=DocumentCheckResponse)
+@router.post("/scan", response_model=DocumentCheckResponse, dependencies=[Depends(legacy_only)])
 def scan(
     request: Request,
     document_type: DocumentType = Form(...),
@@ -85,7 +88,7 @@ def frame(
 # rule is turned off. Folding that into /scan with a flag would mean one endpoint
 # whose rules change under the caller, which is how a check gets skipped by
 # accident.
-@router.post("/birth-certificate", response_model=DocumentCheckResponse)
+@router.post("/birth-certificate", response_model=DocumentCheckResponse, dependencies=[Depends(legacy_only)])
 def birth_certificate(
     request: Request,
     front: UploadFile = File(..., description="The birth certificate"),
