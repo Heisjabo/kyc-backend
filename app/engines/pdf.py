@@ -17,6 +17,29 @@ from app.rules import address as rules
 _MAGIC = b"%PDF-"
 
 
+class PdfUnreadable(ValueError):
+    """The file starts like a PDF but cannot be opened: no pages, damaged, or encrypted.
+
+    pdfium's own error escaped from here, and an address proof that was a PDF with nothing
+    in it came back as HTTP 500.
+    """
+
+
+def _open(data: bytes):
+    import pypdfium2 as pdfium
+
+    try:
+        document = pdfium.PdfDocument(data)
+        if len(document) == 0:
+            document.close()
+            raise PdfUnreadable("the PDF has no pages")
+        return document
+    except PdfUnreadable:
+        raise
+    except Exception as problem:  # pdfium raises PdfiumError, and others for odd files
+        raise PdfUnreadable(f"the PDF could not be opened: {problem}") from None
+
+
 def is_pdf(data: bytes) -> bool:
     """Is this a PDF, by what is in it rather than what it was called?
 
@@ -28,11 +51,9 @@ def is_pdf(data: bytes) -> bool:
 
 def text_lines(data: bytes, max_pages: int | None = None) -> list[str]:
     """The text already inside the PDF, one line per line. Empty for a scan."""
-    import pypdfium2 as pdfium
-
     max_pages = max_pages or rules.PDF_MAX_PAGES
     lines: list[str] = []
-    document = pdfium.PdfDocument(data)
+    document = _open(data)
     try:
         for index in range(min(len(document), max_pages)):
             page = document[index]
@@ -49,11 +70,9 @@ def render_pages(data: bytes, max_pages: int | None = None) -> list[np.ndarray]:
     Rendered at PDF_RENDER_SCALE, which is what puts the print at roughly the
     resolution the OCR was tuned on for photographs of documents.
     """
-    import pypdfium2 as pdfium
-
     max_pages = max_pages or rules.PDF_MAX_PAGES
     images: list[np.ndarray] = []
-    document = pdfium.PdfDocument(data)
+    document = _open(data)
     try:
         for index in range(min(len(document), max_pages)):
             rendered = document[index].render(scale=rules.PDF_RENDER_SCALE)

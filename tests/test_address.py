@@ -667,3 +667,25 @@ def test_the_address_step_waits_its_turn(client, api_key, monkeypatch):
 def test_a_verification_that_never_asked_for_an_address_refuses_the_step(client, api_key, monkeypatch):
     opened, token = pass_document(client, api_key, monkeypatch, services=["document"])
     assert submit_address(client, token).status_code == 422
+
+
+# A PDF that starts like one but cannot be opened (no pages, damaged) used to come back
+# as HTTP 500 from the address step.
+def _blank_pdf() -> bytes:
+    from reportlab.lib.pagesizes import A4
+    from reportlab.pdfgen import canvas
+
+    buffer = io.BytesIO()
+    canvas.Canvas(buffer, pagesize=A4).save()      # saved with no page at all
+    return buffer.getvalue()
+
+
+@pytest.mark.parametrize("data", [
+    _blank_pdf(),
+    b"%PDF-1.4\n%garbage that is not a document\n",
+    b"%PDF-1.7\n" + b"\x00" * 200,
+])
+def test_a_pdf_that_cannot_be_opened_is_sent_back_for_a_retake_not_a_crash(data):
+    result = scan(data)
+    assert result.decision == Decision.retake
+    assert "PROOF_NOT_READABLE" in result.reasons

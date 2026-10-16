@@ -31,7 +31,7 @@ from app.engines.addresses import address_on_document, document_text, is_po_box
 from app.engines.fields import find_dates
 from app.engines.image import InvalidImageError, decode_image
 from app.engines.ocr import read_document
-from app.engines.pdf import is_pdf, render_pages, text_lines
+from app.engines.pdf import PdfUnreadable, is_pdf, render_pages, text_lines
 from app.engines.quality import assess_quality
 from app.pipeline.ai_image import check_ai_generated
 from app.pipeline.document import names_on_document
@@ -182,11 +182,17 @@ def _read_proof(
             # easiest document in this flow to produce and the only one we take as a
             # PDF, was never examined. The text is still read from the text layer
             # when there is one: that is accurate, and this is only for scoring.
-            pages = render_pages(data)
+            try:
+                pages = render_pages(data)
+            except PdfUnreadable:
+                raise UnreadableProof("PROOF_NOT_READABLE") from None
             for number, page in enumerate(pages, start=1):
                 pictures.append((f"{side} page {number}", page))
 
-            inside = text_lines(data)
+            try:
+                inside = text_lines(data)
+            except PdfUnreadable:
+                raise UnreadableProof("PROOF_NOT_READABLE") from None
             if len(inside) >= rules.MIN_TEXT_LINES:
                 lines.extend(inside)
                 # And read the pages as well, to compare with. A text layer is not

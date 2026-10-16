@@ -147,8 +147,8 @@ def _pdf_pages(data: bytes, field: str) -> list[bytes]:
 
     try:
         pages = pdf.render_pages(data, max_pages=document_rules.PDF_MAX_PAGES)
-    except Exception:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, f"{field} could not be opened as a PDF")
+    except pdf.PdfUnreadable:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, f"{field} could not be opened as a PDF") from None
     images = []
     for page in pages:
         ok, buffer = cv2.imencode(".jpg", page, [cv2.IMWRITE_JPEG_QUALITY, 92])
