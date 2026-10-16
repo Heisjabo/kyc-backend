@@ -147,6 +147,7 @@ class SessionResponse(BaseModel):
     next_step: str | None
     completed_steps: list[str]
     expired: bool
+    expires_at: datetime | None = None
     redirect_url: str | None
 
 

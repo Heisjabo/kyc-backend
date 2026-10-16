@@ -199,7 +199,7 @@ def test_the_session_view_carries_nothing_about_the_client(client, api_key):
     body = open_verification(client, api_key)
     session = client.get(f"/v1/sessions/{token_of(body)}").json()
     assert set(session) == {"reference", "status", "services", "next_step",
-                            "completed_steps", "expired", "redirect_url"}
+                            "completed_steps", "expired", "expires_at", "redirect_url"}
 
 
 def test_an_unknown_link_is_not_found(client):

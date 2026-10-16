@@ -12,6 +12,8 @@ more accurate than OCR could be.
 
 import numpy as np
 
+from app.core.config import settings
+
 from app.rules import address as rules
 
 _MAGIC = b"%PDF-"
@@ -75,7 +77,12 @@ def render_pages(data: bytes, max_pages: int | None = None) -> list[np.ndarray]:
     document = _open(data)
     try:
         for index in range(min(len(document), max_pages)):
-            rendered = document[index].render(scale=rules.PDF_RENDER_SCALE)
+            page = document[index]
+            width, height = page.get_size()   # points; the render is this times the scale
+            side = max(width, height) * rules.PDF_RENDER_SCALE
+            if side > settings.MAX_IMAGE_SIDE_PX or width * height * rules.PDF_RENDER_SCALE**2 > settings.MAX_IMAGE_PIXELS:
+                raise PdfUnreadable("the PDF page is too large")
+            rendered = page.render(scale=rules.PDF_RENDER_SCALE)
             # The OCR and the quality checks work in BGR, as OpenCV reads images.
             images.append(np.asarray(rendered.to_pil().convert("RGB"))[:, :, ::-1].copy())
     finally:

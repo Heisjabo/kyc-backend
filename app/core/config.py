@@ -7,7 +7,9 @@ class Settings(BaseSettings):
     APP_NAME: str = "Tuesday KYC Platform"
     APP_VERSION: str = "0.1.0"
     ENVIRONMENT: str = "development"
-    ENABLE_DOCS: bool = True
+    # Interactive API docs. Left unset they are on in development and off everywhere else;
+    # set it to true or false to say otherwise.
+    ENABLE_DOCS: bool | None = None
 
     # Which browsers may call this API. "*" is any page anywhere, which is what a
     # verification journey served from its own domain needs, and it is the default.
@@ -79,10 +81,10 @@ class Settings(BaseSettings):
     # How long a verification link works for, in minutes. Shufti's default is
     # 60 and a client can override it per request with ttl.
     SESSION_TTL_MINUTES: int = 60
-    # The longest a client may ask for: 30 days. A link that lives for weeks is
+    # The longest a client may ask for: 7 days. A link that lives for weeks is
     # a link that can be forwarded, so this is a ceiling rather than an
     # encouragement, and it is a setting so it can be lowered without a release.
-    MAX_SESSION_TTL_MINUTES: int = 60 * 24 * 30
+    MAX_SESSION_TTL_MINUTES: int = 60 * 24 * 7
 
     # Evidence lives in Google Drive, reached with a service account key, the way
     # our database backups do. Its two interesting fields:
@@ -148,6 +150,22 @@ class Settings(BaseSettings):
     # response so the flow can be tested; anywhere else that is refused at
     # start-up.
     EMAIL_ENABLED: bool = False
+    # Outgoing mail over SMTP (any provider offers it). EMAIL_ENABLED turns sending on.
+    SMTP_HOST: str = ""
+    SMTP_PORT: int = 587
+    SMTP_USER: str = ""
+    SMTP_PASSWORD: str = ""
+    SMTP_STARTTLS: bool = True
+    EMAIL_FROM: str = "Tuesday KYC <no-reply@tuesday.africa>"
+
+    # Limits on one account.
+    MAX_API_KEYS_PER_ACCOUNT: int = 10
+    # Verifications one account may open in a day (0 is no limit).
+    MAX_VERIFICATIONS_PER_DAY: int = 5000
+    # The longest side of an uploaded image or PDF page, in pixels, checked before it is decoded.
+    MAX_IMAGE_SIDE_PX: int = 8000
+    MAX_IMAGE_PIXELS: int = 40_000_000
+    MAX_PDF_PAGES: int = 10
     DASHBOARD_URL: str = "http://localhost:3000"
     REDIS_URL: str = "redis://localhost:6379/0"
 

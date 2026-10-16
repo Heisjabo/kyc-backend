@@ -31,6 +31,7 @@ from app.engines.addresses import address_on_document, document_text, is_po_box
 from app.engines.fields import find_dates
 from app.engines.image import InvalidImageError, decode_image
 from app.engines.ocr import read_document
+from app.engines import provenance
 from app.engines.pdf import PdfUnreadable, is_pdf, render_pages, text_lines
 from app.engines.quality import assess_quality
 from app.pipeline.ai_image import check_ai_generated
@@ -126,8 +127,22 @@ def scan_address_proof(
     checks.append(_text_layer_agrees(claimed_address, lines, on_the_page, today))
     checks.append(_owner_check(names or [], lines))
     checks.append(_recency_check(lines, today, extracted))
-    # No tamper check exists. By default that means a person looks at every proof that
-    # would otherwise pass; see ADDRESS_PROOFS_NEED_REVIEW.
+    # The file's own history: the editor that made it, saves after it was issued. Evidence,
+    # not proof; a clean result proves nothing, so this only ever adds a reason.
+    traces = {}
+    for data in (front, back):
+        if data:
+            traces.update(provenance.signals(data))
+    checks.append(
+        CheckResult(
+            name="address_document_provenance",
+            status=CheckStatus.review if traces else CheckStatus.passed,
+            reasons=["POSSIBLE_TAMPERING"] if traces else [],
+            details={"signals": traces},
+        )
+    )
+    # There is no way to prove a proof is genuine. By default a person looks at every proof
+    # that would otherwise pass; see ADDRESS_PROOFS_NEED_REVIEW.
     needs_review = settings.ADDRESS_PROOFS_NEED_REVIEW
     checks.append(
         CheckResult(
@@ -372,12 +387,14 @@ def _recency_check(lines: list[str], today: date, extracted: AddressExtracted) -
     Shufti request asks for as document_validity. No date at all goes to a person:
     plenty of genuine bills print one in a format nothing reads.
     """
-    dates = [value for line in lines for value in find_dates(line, today) if value <= today]
+    found = [value for line in lines for value in find_dates(line, today)]
+    dates = [value for value in found if value <= today]
     if not dates:
+        # Dated, but only in the future: that is not "no date", and it is not a normal bill.
         return CheckResult(
             name="address_document_expiration",
             status=CheckStatus.review,
-            reasons=["PROOF_DATE_NOT_FOUND"],
+            reasons=["PROOF_DATE_IN_FUTURE" if found else "PROOF_DATE_NOT_FOUND"],
         )
 
     issued = max(dates)

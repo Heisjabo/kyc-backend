@@ -11,11 +11,12 @@ one that leaks is always the oldest one.
 from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.api.deps import Caller, current_account, current_caller
 from app.core import security
+from app.core.config import settings
 from app.db.models import Account, ApiKey, AuditEvent
 from app.db.session import get_session
 from app.schemas.auth import ApiKeyResponse, CreateApiKeyRequest, CreatedApiKeyResponse
@@ -60,6 +61,16 @@ def create_key(
     db: Session = Depends(get_session),
 ) -> CreatedApiKeyResponse:
     """Make a key. This response is the only time the key itself is returned."""
+    live = db.scalar(
+        select(func.count()).select_from(ApiKey).where(
+            ApiKey.account_id == account.id, ApiKey.revoked_at.is_(None), ApiKey.deleted_at.is_(None)
+        )
+    )
+    if live >= settings.MAX_API_KEYS_PER_ACCOUNT:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            f"An account can have {settings.MAX_API_KEYS_PER_ACCOUNT} keys. Revoke one you no longer use first.",
+        )
     key, prefix, secret_hash = security.new_api_key()
     row = ApiKey(
         account_id=account.id,

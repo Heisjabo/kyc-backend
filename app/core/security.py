@@ -262,12 +262,18 @@ def check_configuration() -> None:
             "JWT_SECRET is the published default or too short, and ENVIRONMENT is "
             f"{settings.ENVIRONMENT!r}. Set a long random JWT_SECRET before starting."
         )
-    if not settings.EMAIL_ENABLED:
-        # Not fatal: the service is useful without password resets. But nobody
-        # should discover this when a customer cannot get back into their account.
+    if not (settings.EMAIL_ENABLED and settings.SMTP_HOST):
+        # Not fatal: the service is useful without password resets, and email is set up separately.
         import logging
 
         logging.getLogger(__name__).warning(
-            "EMAIL_ENABLED is off outside development: password resets will be "
-            "created but never delivered."
+            "Email is not configured outside development: password resets will be created but "
+            "never delivered. Set EMAIL_ENABLED=true and the SMTP_ settings."
+        )
+    if settings.CORS_ORIGINS.strip() == "*":
+        import logging
+
+        logging.getLogger(__name__).warning(
+            "CORS_ORIGINS is '*' outside development: any website may call this API from a browser. "
+            "Set it to the front-end addresses."
         )

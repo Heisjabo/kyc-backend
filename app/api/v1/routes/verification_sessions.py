@@ -10,16 +10,17 @@ Two audiences, two kinds of access:
     which is what lets them carry on from their phone.
 """
 
-from datetime import date
+from datetime import UTC, date, datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.api.deps import Caller, account_from_api_key, current_caller
 from app.api.v1.routes import console_verifications as views
 from app.core import ratelimit, urls
+from app.core.config import settings
 from app.db.models import (
     Account,
     FileKind,
@@ -55,7 +56,6 @@ def _as_response(verification: Verification) -> VerificationResponse:
         if current is None or step.attempt > current.attempt:
             latest[step.step] = step
 
-    from app.core.config import settings
     session_url = (
         f"{settings.VERIFY_BASE_URL.strip().rstrip('/')}/verify/{verification.session_token}"
         if settings.VERIFY_BASE_URL
@@ -106,6 +106,15 @@ def create_verification(
     The record exists from this moment, before they have done anything, so every
     step, image and callback that follows has something to hang off.
     """
+    if settings.MAX_VERIFICATIONS_PER_DAY:
+        today = db.scalar(
+            select(func.count()).select_from(Verification).where(
+                Verification.account_id == account.id,
+                Verification.created_at >= datetime.now(UTC) - timedelta(days=1),
+            )
+        )
+        if today >= settings.MAX_VERIFICATIONS_PER_DAY:
+            raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, "This account has reached its daily limit of verifications")
     # Existing clients that send document + face receive the final AML check too.
     if 'document' in body.services and 'face' in body.services and 'aml' not in body.services:
         body.services.append('aml')
@@ -433,5 +442,6 @@ def read_session(token: str, db: Session = Depends(get_session)) -> SessionRespo
         next_step=outstanding[0] if outstanding and verification.status.value != "needs_review" else None,
         completed_steps=done,
         expired=service.is_expired(verification),
+        expires_at=verification.expires_at,
         redirect_url=urls.redirect_or_none(verification.redirect_url),
     )

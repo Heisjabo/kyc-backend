@@ -25,12 +25,18 @@ async def lifespan(app: FastAPI):
     flush_bursts(everything=True)
 
 
+def docs_enabled() -> bool:
+    if settings.ENABLE_DOCS is None:
+        return settings.ENVIRONMENT == "development"
+    return settings.ENABLE_DOCS
+
+
 def create_app() -> FastAPI:
     check_configuration()
     app = FastAPI(
         title=settings.APP_NAME,
         version=settings.APP_VERSION,
-        docs_url="/docs" if settings.ENABLE_DOCS else None,
+        docs_url="/docs" if docs_enabled() else None,
         redoc_url=None,
         lifespan=lifespan,
     )
