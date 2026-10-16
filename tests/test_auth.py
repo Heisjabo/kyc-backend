@@ -371,3 +371,16 @@ def test_the_auth_endpoints_are_in_the_api_schema(client):
                  "/v1/auth/forgot-password", "/v1/auth/reset-password",
                  "/v1/api-keys", "/v1/api-keys/{key_id}"):
         assert path in paths
+
+
+# Tokens that outlive a password
+
+def test_a_token_stops_working_when_the_password_is_reset(client):
+    token = signed_in(client)
+    assert client.get("/v1/auth/me", headers=auth(token)).status_code == 200
+    reset = client.post("/v1/auth/forgot-password", json={"email": "jean@tuesday.africa"}).json()["reset_token"]
+    assert client.post("/v1/auth/reset-password", json={"token": reset, "password": "brand-new-pass"}).status_code == 200
+
+    assert client.get("/v1/auth/me", headers=auth(token)).status_code == 401
+    new = client.post("/v1/auth/login", json={"email": "jean@tuesday.africa", "password": "brand-new-pass"})
+    assert client.get("/v1/auth/me", headers=auth(new.json()["access_token"])).status_code == 200

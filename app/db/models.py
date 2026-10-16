@@ -97,6 +97,15 @@ class Account(Base):
 
     __tablename__ = "accounts"
 
+    @property
+    def token_version(self) -> str:
+        """Sign-in tokens carry this. It comes from the stored password hash, so a password
+        reset or change gives a new value and earlier sessions stop working. Nothing extra
+        is stored, so no database change is needed."""
+        import hashlib
+
+        return hashlib.sha256((self.password_hash or "").encode()).hexdigest()[:16]
+
     id: Mapped[IntPk]
     # Stored lower-cased, so "Jean@X.com" and "jean@x.com" are one account.
     email: Mapped[str] = mapped_column(String, unique=True, nullable=False, index=True)

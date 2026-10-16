@@ -181,3 +181,14 @@ def test_creating_an_address_that_already_has_an_account_is_refused(db_session):
     create_console_account(db_session, **STAFF)
     with pytest.raises(ConsoleAdminError):
         create_console_account(db_session, **STAFF)
+
+
+def test_a_console_token_stops_working_when_the_password_changes(client, db_session):
+    create_console_account(db_session, **STAFF)
+    token = console_login(client).json()["access_token"]
+    changed = client.post("/v1/console/auth/password", headers=auth(token),
+                          json={"current_password": PASSWORD, "new_password": "a-much-longer-passphrase"})
+    assert changed.status_code == 200
+    assert client.get("/v1/console/auth/me", headers=auth(token)).status_code == 401
+    again = console_login(client, password="a-much-longer-passphrase")
+    assert client.get("/v1/console/auth/me", headers=auth(again.json()["access_token"])).status_code == 200

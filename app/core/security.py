@@ -62,7 +62,7 @@ def needs_rehash(stored: str) -> bool:
 
 # Session tokens
 
-def issue_access_token(account_id: str, email: str) -> tuple[str, int]:
+def issue_access_token(account_id: str, email: str, version: str = "") -> tuple[str, int]:
     """A signed token for the dashboard, and how many seconds it lasts."""
     seconds = settings.ACCESS_TOKEN_MINUTES * 60
     now = datetime.now(UTC)
@@ -72,6 +72,7 @@ def issue_access_token(account_id: str, email: str) -> tuple[str, int]:
         "iat": now,
         "exp": now + timedelta(seconds=seconds),
         "typ": "access",
+        "ver": version,
     }
     return jwt.encode(payload, settings.JWT_SECRET, algorithm="HS256"), seconds
 
@@ -93,7 +94,9 @@ def read_access_token(token: str) -> dict | None:
 # products travel in the token for the console's convenience only; the endpoints
 # read them again from the account, so a change takes effect at once.
 
-def issue_console_token(account_id: str, email: str, role: str, products: list[str]) -> tuple[str, int]:
+def issue_console_token(
+    account_id: str, email: str, role: str, products: list[str], version: str = ""
+) -> tuple[str, int]:
     """A signed token for the admin console, and how many seconds it lasts."""
     seconds = settings.ACCESS_TOKEN_MINUTES * 60
     now = datetime.now(UTC)
@@ -105,6 +108,7 @@ def issue_console_token(account_id: str, email: str, role: str, products: list[s
         "iat": now,
         "exp": now + timedelta(seconds=seconds),
         "typ": "console",
+        "ver": version,
     }
     return jwt.encode(payload, settings.JWT_SECRET, algorithm="HS256"), seconds
 

@@ -219,5 +219,5 @@ def _token_for(account: Account, db: Session) -> TokenResponse:
     account.last_login_at = datetime.now(UTC)
     db.commit()
     db.refresh(account)
-    token, seconds = security.issue_access_token(str(account.id), account.email)
+    token, seconds = security.issue_access_token(str(account.id), account.email, account.token_version)
     return TokenResponse(access_token=token, expires_in=seconds, account=_as_response(account))

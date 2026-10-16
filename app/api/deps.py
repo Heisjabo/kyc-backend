@@ -59,8 +59,20 @@ def current_account(
     account = db.get(Account, _as_id(claims.get("sub")))
     if account is None or not account.is_active:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "That account is no longer active")
+    _same_version(claims, account)
     set_actor(request, account.id, "dashboard")
     return account
+
+
+def _same_version(claims: dict, account: Account) -> None:
+    """A token from before the last password change or suspension is no longer good."""
+    # Tokens issued before this existed carry no version and are left alone.
+    if claims.get("ver") is not None and claims["ver"] != account.token_version:
+        raise HTTPException(
+            status.HTTP_401_UNAUTHORIZED,
+            "That session has ended. Sign in again.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
 
 
 def current_console_account(
@@ -90,6 +102,7 @@ def current_console_account(
     account = db.get(Account, _as_id(claims.get("sub")))
     if account is None or not account.is_active or not account.console_role:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "This account cannot use the admin console")
+    _same_version(claims, account)
     set_actor(request, account.id, "console")
     return account
 

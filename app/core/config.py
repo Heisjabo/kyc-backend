@@ -137,6 +137,9 @@ class Settings(BaseSettings):
     # of character classes.
     MIN_PASSWORD_LENGTH: int = 12
     MAX_PASSWORD_LENGTH: int = 128
+    # Sent as Strict-Transport-Security when the request came in over https (behind nginx,
+    # X-Forwarded-Proto). A year; 0 turns it off.
+    HSTS_SECONDS: int = 31536000
     # The longest an API key may be asked to live.
     MAX_API_KEY_DAYS: int = 365
 
