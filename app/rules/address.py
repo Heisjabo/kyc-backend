@@ -1,8 +1,9 @@
 """Thresholds and vocabulary for the address check. Tune against real samples."""
 
 # What counts as a proof of address, matching the supported_types we send Shufti
-# (tuesday-backend/src/shufti/shufti.service.ts). A driving licence is not on the
-# list: only a few countries print an address on one, and ours does not.
+# (tuesday-backend/src/shufti/shufti.service.ts). A driving licence is not offered
+# unless the client asks for it in address_types: only a few countries print an
+# address on one.
 PROOF_TYPES = ("utility_bill", "bank_statement", "credit_card_statement", "rent_agreement")
 
 # How recent the proof has to be, in days. Shufti is sent document_validity: 90,
@@ -28,6 +29,11 @@ TYPE_WORDS = {
     "rent_agreement": (
         "lease", "tenancy", "tenant", "landlord", "rent", "rental", "lessor",
         "lessee", "premises", "agreement",
+    ),
+    "driving_license": (
+        "driving licence", "driving license", "driver license", "driver's license",
+        "drivers license", "driver licence", "permis de conduire", "endorsements",
+        "restrictions", "dmv", "dvla", "motor vehicle",
     ),
 }
 

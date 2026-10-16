@@ -408,6 +408,18 @@ of `aml`. The form has to be active and given to your account, otherwise the
 request is refused with 422. `GET /v1/due-diligence/forms` lists the ones you can
 use.
 
+`document_types` narrows the identity documents the person can choose from, the
+way Shufti's `document.supported_types` does: any of `passport`, `id_card`,
+`driving_license`. Left out, all three are offered. The session page shows only
+these, and a document of any other type is refused with 422 at the step.
+
+`address_types` does the same for the proof of address, like Shufti's
+`address.supported_types`: any of `utility_bill`, `bank_statement`,
+`credit_card_statement`, `rent_agreement`, `driving_license`. Left out, every
+proof except a driving licence is offered, since only a few countries print an
+address on one. A licence is held to its expiry date instead of the 90 days a
+bill or statement is: an expired one fails with `PROOF_EXPIRED`.
+
 ### Endpoints
 
 | | |
@@ -606,7 +618,9 @@ whether it is required:
 `text`, `textarea`, `number`, `amount`, `date`, `select`, `multi_select`,
 `country`, `yes_no`, `file`
 
-`select` and `multi_select` carry their `options`. A file is an image or a PDF up
+`select` and `multi_select` carry their `options`. A `text` question can carry
+`expected`, the exact word the person has to type (compared ignoring case), as in
+Shufti's "type confirm" passport confirmation. A file is an image or a PDF up
 to 15 MB, kept with the verification's other evidence.
 
 The `key` is what ties an answer to its question, so it stays the same when the

@@ -6,8 +6,9 @@ client already integrated with them can point at us with almost no change.
 """
 
 from datetime import date, datetime
+from typing import Literal
 
-from pydantic import BaseModel, EmailStr, Field, model_validator
+from pydantic import BaseModel, EmailStr, Field, field_validator, model_validator
 
 from app.core.config import settings
 from app.schemas.console import ConsoleApplicant, ConsoleCheck, ConsoleClient, ConsoleDocument, ConsoleFile, ConsoleReviewEvent
@@ -43,6 +44,19 @@ class CreateVerificationRequest(BaseModel):
     language: str | None = Field(default="EN", max_length=8)
     verification_mode: str | None = Field(default="any", max_length=16)
     form_id: str | None = Field(default=None, max_length=120)
+    # The identity documents the person may choose from, as Shufti's
+    # document.supported_types. Left out, every adult document is offered.
+    document_types: list[Literal["passport", "id_card", "driving_license"]] | None = Field(
+        default=None, description="passport, id_card, driving_license"
+    )
+    # The proofs of address the person may choose from, as Shufti's
+    # address.supported_types. Left out, every proof except a driving licence.
+    address_types: list[
+        Literal["utility_bill", "bank_statement", "credit_card_statement", "rent_agreement", "driving_license"]
+    ] | None = Field(
+        default=None,
+        description="utility_bill, bank_statement, credit_card_statement, rent_agreement, driving_license",
+    )
     # Minutes, as Shufti defines it: the link stops working this long after it
     # is created. Their default is 60, and so is ours. Longer is allowed up to
     # MAX_SESSION_TTL_MINUTES, so a client can send somebody a link that lasts a
@@ -50,6 +64,16 @@ class CreateVerificationRequest(BaseModel):
     # time. ttl_days is the same setting for people who would rather say "7".
     ttl: int | None = Field(default=None, ge=1, description="Minutes the session stays open")
     ttl_days: int | None = Field(default=None, ge=1, le=30, description="Days the session stays open")
+
+    @field_validator("document_types", "address_types")
+    @classmethod
+    def _document_types(cls, value: list[str] | None) -> list[str] | None:
+        if value is None:
+            return None
+        if not value:
+            raise ValueError("needs at least one type, or leave it out")
+        # Once each, in the order sent.
+        return list(dict.fromkeys(value))
 
     @model_validator(mode="after")
     def _one_ttl(self):
@@ -135,6 +159,10 @@ class SessionResponse(BaseModel):
     completed_steps: list[str]
     expired: bool
     redirect_url: str | None
+    # The identity documents offered on the document step; None offers all of them.
+    document_types: list[str] | None = None
+    # The proofs offered on the address step; None offers all but a driving licence.
+    address_types: list[str] | None = None
 
 
 class VerifyChildRequest(BaseModel):

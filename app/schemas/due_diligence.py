@@ -37,6 +37,9 @@ class FormField(BaseModel):
     help: str | None = Field(default=None, max_length=1000)
     placeholder: str | None = Field(default=None, max_length=200)
     options: list[str] = Field(default_factory=list, description="The choices, for select and multi_select")
+    # For a text question: the exact word the person has to type, such as
+    # "confirm" on Shufti's passport confirmation. Compared ignoring case.
+    expected: str | None = Field(default=None, max_length=100)
 
     @field_validator("key")
     @classmethod
@@ -59,6 +62,10 @@ class FormField(BaseModel):
             raise ValueError(f"{self.label!r} is a {self.type} and needs at least one option")
         if self.type not in CHOICE_TYPES:
             self.options = []
+        if self.expected is not None:
+            self.expected = self.expected.strip() or None
+        if self.type != "text":
+            self.expected = None
         return self
 
 
