@@ -39,10 +39,12 @@ def test_the_session_view_says_when_the_link_expires(client, api_key):
     assert view["expires_at"] is not None
 
 
-# L7: the ceiling
+# The ceiling stays at 30 days: clients (the Tuesday app sends ttl_days=20) rely on it.
 
-def test_a_link_cannot_be_asked_to_last_longer_than_a_week():
-    assert settings.MAX_SESSION_TTL_MINUTES == 60 * 24 * 7
+def test_a_link_can_still_be_asked_to_last_twenty_days(client, api_key):
+    response = client.post("/v1/verifications", json={"services": ["document"], "ttl_days": 20, "applicant": {}}, headers=api_key)
+    assert response.status_code in (200, 201)
+    assert settings.MAX_SESSION_TTL_MINUTES == 60 * 24 * 30
 
 
 # L9: image size is checked before decoding

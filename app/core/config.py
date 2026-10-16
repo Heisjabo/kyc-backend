@@ -81,10 +81,10 @@ class Settings(BaseSettings):
     # How long a verification link works for, in minutes. Shufti's default is
     # 60 and a client can override it per request with ttl.
     SESSION_TTL_MINUTES: int = 60
-    # The longest a client may ask for: 7 days. A link that lives for weeks is
+    # The longest a client may ask for: 30 days. A link that lives for weeks is
     # a link that can be forwarded, so this is a ceiling rather than an
     # encouragement, and it is a setting so it can be lowered without a release.
-    MAX_SESSION_TTL_MINUTES: int = 60 * 24 * 7
+    MAX_SESSION_TTL_MINUTES: int = 60 * 24 * 30
 
     # Evidence lives in Google Drive, reached with a service account key, the way
     # our database backups do. Its two interesting fields:
