@@ -6,11 +6,15 @@ returned exactly once: in the response that created it.
 
 from datetime import date, datetime
 
-from pydantic import BaseModel, EmailStr, Field
+from typing import Annotated
 
+from pydantic import AfterValidator, BaseModel, EmailStr, Field
+
+from app.core import passwords
 from app.core.config import settings
 
-PASSWORD = Field(min_length=settings.MIN_PASSWORD_LENGTH, max_length=settings.MAX_PASSWORD_LENGTH)
+# A new password: long enough, not on the list of leaked ones. Sign-in does not use this.
+NewPassword = Annotated[str, AfterValidator(passwords.check)]
 
 
 class RegisterRequest(BaseModel):
@@ -21,7 +25,7 @@ class RegisterRequest(BaseModel):
     """
 
     email: EmailStr
-    password: str = PASSWORD
+    password: NewPassword
     first_name: str = Field(min_length=1, max_length=80)
     last_name: str = Field(min_length=1, max_length=80)
     phone: str = Field(min_length=5, max_length=32)
@@ -78,7 +82,7 @@ class ForgotPasswordResponse(BaseModel):
 
 class ResetPasswordRequest(BaseModel):
     token: str
-    password: str = PASSWORD
+    password: NewPassword
 
 
 class CreateApiKeyRequest(BaseModel):

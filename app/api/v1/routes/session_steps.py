@@ -53,6 +53,7 @@ from app.schemas.due_diligence import Answer, DueDiligenceResult, SessionForm
 from app.schemas.face import FaceVerificationResponse
 from app.services import due_diligence as forms
 from app.services import network
+from app.services import person_view
 from app.services import verifications as service
 from app.storage import evidence, sessions
 
@@ -348,7 +349,7 @@ def submit_document(
     result.warnings = list(dict.fromkeys(warnings))
     result.portrait = portrait_kept
     result.verification_id = verification.reference
-    return result
+    return person_view.document(result)
 
 
 def _keep_document_portrait(db: Session, verification: Verification, step: Step, front: bytes) -> str:
@@ -501,7 +502,7 @@ def submit_address(
         extracted=result.extracted.model_dump(mode="json"),
     )
     service.settle(db, verification)
-    return result
+    return person_view.address(result)
 
 
 @router.post("/{token}/face", response_model=FaceVerificationResponse, dependencies=[ratelimit.limit("step-token", 20, 60, by="token"), ratelimit.limit("step-ip", 120, 60)])
@@ -632,7 +633,7 @@ def submit_face(
     )
     verification = service.settle(db, verification)
 
-    return FaceVerificationResponse(
+    return person_view.face(FaceVerificationResponse(
         verification_id=verification.reference,
         verification_status=verification.status.value,
         decision=Decision.passed if passed else Decision.failed,
@@ -643,7 +644,7 @@ def submit_face(
         document=None,
         processing_ms=int((time.perf_counter() - started) * 1000),
         redirect_url=verification.redirect_url,
-    )
+    ))
 
 
 def _document_template(db: Session, verification: Verification) -> list | None:

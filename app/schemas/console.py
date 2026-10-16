@@ -10,7 +10,7 @@ from datetime import date, datetime
 
 from pydantic import BaseModel, Field
 
-from app.schemas.auth import PASSWORD
+from app.schemas.auth import NewPassword
 
 
 class ConsoleUserResponse(BaseModel):
@@ -572,7 +572,7 @@ class ConsoleProfileUpdate(BaseModel):
 
 class ConsolePasswordChange(BaseModel):
     current_password: str = Field(min_length=1, max_length=200)
-    new_password: str = PASSWORD
+    new_password: NewPassword
 
 
 # Team: console members and invitations to join.
@@ -642,7 +642,7 @@ class ConsoleInvitePreview(BaseModel):
 class ConsoleInviteAccept(BaseModel):
     first_name: str = Field(min_length=1, max_length=80)
     last_name: str = Field(min_length=1, max_length=80)
-    password: str = PASSWORD
+    password: NewPassword
     phone: str = Field(min_length=5, max_length=32)
     country_code: str = Field(min_length=1, max_length=8, description="Dialling code, e.g. +250")
     country: str = Field(min_length=2, max_length=80)
@@ -705,7 +705,7 @@ class ConsoleAmlEntity(BaseModel):
 
 class ConsoleAccountCreate(BaseModel):
     email: str = Field(min_length=3, max_length=254, pattern=r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
-    password: str = PASSWORD
+    password: NewPassword
     first_name: str = Field(min_length=1, max_length=80)
     last_name: str = Field(min_length=1, max_length=80)
     phone: str = Field(min_length=5, max_length=32)

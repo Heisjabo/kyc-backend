@@ -608,3 +608,22 @@ def test_a_passed_step_is_not_counted_against_the_person(client, api_key, monkey
 
 def test_the_default_cap_is_five():
     assert type(settings).model_fields["MAX_STEP_ATTEMPTS"].default == 5
+
+
+def test_the_person_gets_the_decision_and_reasons_but_not_the_data_read(client, api_key, db_session, monkeypatch):
+    """Reasons stay so the person can fix things; extracted data and checks stay with the client."""
+    stub_document(monkeypatch)
+    body = open_verification(client, api_key)
+    response = client.post(
+        f"/v1/sessions/{token_of(body)}/document",
+        data={"document_type": "id_card"},
+        files={"front": ("front.jpg", image_bytes(), "image/jpeg"),
+               "back": ("back.jpg", image_bytes(), "image/jpeg")},
+    ).json()
+    assert response["decision"] == "pass" and "reasons" in response
+    assert response["extracted"] is None and response["checks"] == []
+    assert "1199980012345678" not in str(response)
+
+    verification = db_session.scalar(select(Verification).where(Verification.reference == body["reference"]))
+    step = db_session.scalar(select(Step).where(Step.verification_id == verification.id, Step.step == "document"))
+    assert step.extracted["document_number"] == "1199980012345678"

@@ -578,13 +578,14 @@ def test_the_step_records_its_verdict_and_keeps_the_file(client, api_key, monkey
     assert body["decision"] == "pass"
     assert body["extracted"]["document_type"] == "utility_bill"
     assert body["extracted"]["full_address"] == "KG 586 St, Kigali City"
-    assert body["extracted"]["address_found"] is True
+    assert body["extracted"]["address_found"] is None   # what was read is not sent to the person
 
     step = db_session.scalars(
         select(Step).where(Step.step == VerificationStep.address)
     ).one()
     assert step.status == StepStatus.passed
     assert step.extracted["document_type"] == "utility_bill"
+    assert step.extracted["address_found"] is True
     assert step.device["user_agent"]
 
     kept = db_session.scalars(

@@ -28,7 +28,7 @@ from sqlalchemy import select
 from sqlalchemy.engine import make_url
 from sqlalchemy.orm import Session
 
-from app.core import security
+from app.core import passwords, security
 from app.core.config import settings
 from app.db.models import CONSOLE_PRODUCTS, CONSOLE_ROLES, Account
 
@@ -53,10 +53,9 @@ def _role(value: str) -> str:
 
 
 def _check_password(password: str) -> None:
-    if not settings.MIN_PASSWORD_LENGTH <= len(password) <= settings.MAX_PASSWORD_LENGTH:
-        raise ConsoleAdminError(
-            f"The password must be {settings.MIN_PASSWORD_LENGTH} to {settings.MAX_PASSWORD_LENGTH} characters"
-        )
+    message = passwords.problem_with(password)
+    if message:
+        raise ConsoleAdminError(message)
 
 
 def create_console_account(

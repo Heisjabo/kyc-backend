@@ -132,12 +132,11 @@ class Settings(BaseSettings):
     # How long a password reset link is good for. Long enough to find the email,
     # short enough that a forwarded one is useless tomorrow.
     PASSWORD_RESET_MINUTES: int = 30
-    # The same rule tuesday-backend applies (UpdatePasscodeDto): 8 to 16
-    # characters, no required mixture of character classes. Keeping one rule
-    # across our services means a person is not told different things by
-    # different parts of Tuesday.
-    MIN_PASSWORD_LENGTH: int = 8
-    MAX_PASSWORD_LENGTH: int = 16
+    # At least 12 characters and up to 128, so a passphrase fits, and refused if it is on the
+    # bundled list of commonly leaked passwords (app/core/passwords.py). No required mixture
+    # of character classes.
+    MIN_PASSWORD_LENGTH: int = 12
+    MAX_PASSWORD_LENGTH: int = 128
     # The longest an API key may be asked to live.
     MAX_API_KEY_DAYS: int = 365
 
