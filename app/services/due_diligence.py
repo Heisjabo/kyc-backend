@@ -89,6 +89,8 @@ def check_answer(field: FormField, value):
             raise AnswerError(field, "expected text")
         if len(value) > MAX_TEXT:
             raise AnswerError(field, f"keep it under {MAX_TEXT} characters")
+        if field.expected and value.strip().casefold() != field.expected.casefold():
+            raise AnswerError(field, f'type "{field.expected}" to answer')
         return value.strip()
 
     if kind in ("number", "amount"):
