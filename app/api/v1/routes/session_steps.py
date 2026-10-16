@@ -269,6 +269,13 @@ def submit_document(
     """
     verification = _open_session(db, token)
     _require_turn(verification, VerificationStep.document)
+    # The client may have narrowed what this person can use, as Shufti's supported_types.
+    allowed = (verification.settings or {}).get("document_types")
+    if allowed and document_type.value not in allowed:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            f"{document_type.value} is not accepted on this verification. Accepted: {', '.join(allowed)}",
+        )
     _attempts_left(db, verification, VerificationStep.document)
 
     front_bytes, front_type, back_bytes, back_type = _read_document(front, back, document_type)
@@ -463,6 +470,14 @@ def submit_address(
     verification = _open_session(db, token)
     _require_turn(verification, VerificationStep.address)
     _attempts_left(db, verification, VerificationStep.address)
+
+    # As Shufti's address supported_types: the client's list, or every proof but a licence.
+    allowed_proofs = (verification.settings or {}).get("address_types") or list(address_rules.PROOF_TYPES)
+    if document_type.value not in allowed_proofs:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            f"{document_type.value} is not accepted on this verification. Accepted: {', '.join(allowed_proofs)}",
+        )
 
     claimed_address = (verification.claimed or {}).get("address")
     if not claimed_address:

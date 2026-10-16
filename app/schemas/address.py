@@ -13,6 +13,9 @@ class ProofType(str, Enum):
     bank_statement = "bank_statement"
     credit_card_statement = "credit_card_statement"
     rent_agreement = "rent_agreement"
+    # Only where the licence prints the holder's address (the US and the UK, in
+    # Shufti's journeys), so a client has to ask for it in address_types.
+    driving_license = "driving_license"
 
 
 class AddressExtracted(BaseModel):

@@ -126,7 +126,10 @@ def scan_address_proof(
     checks.append(_address_check(claimed_address, lines, extracted))
     checks.append(_text_layer_agrees(claimed_address, lines, on_the_page, today))
     checks.append(_owner_check(names or [], lines))
-    checks.append(_recency_check(lines, today, extracted))
+    if proof_type == ProofType.driving_license:
+        checks.append(_licence_validity_check(lines, today, extracted))
+    else:
+        checks.append(_recency_check(lines, today, extracted))
     # The file's own history: the editor that made it, saves after it was issued. Evidence,
     # not proof; a clean result proves nothing, so this only ever adds a reason.
     traces = {}
@@ -408,4 +411,35 @@ def _recency_check(lines: list[str], today: date, extracted: AddressExtracted) -
         status=CheckStatus.passed if fresh else CheckStatus.failed,
         reasons=[] if fresh else ["PROOF_TOO_OLD"],
         details={"proof_date": issued, "age_days": age_days, "allowed_days": rules.MAX_PROOF_AGE_DAYS},
+    )
+
+
+def _licence_validity_check(lines: list[str], today: date, extracted: AddressExtracted) -> CheckResult:
+    """Is the driving licence still valid?
+
+    A licence is issued years before it is used, so the 90 days a bill is held to
+    would refuse every one. What matters is that it has not expired: the latest
+    date printed on it is its expiry, and it has to be today or later. No date at
+    all goes to a person, as it does for a bill.
+    """
+    dates = [value for line in lines for value in find_dates(line, today)]
+    if not dates:
+        return CheckResult(
+            name="address_document_expiration",
+            status=CheckStatus.review,
+            reasons=["PROOF_DATE_NOT_FOUND"],
+        )
+
+    expires = max(dates)
+    issued = [value for value in dates if value <= today]
+    if issued:
+        extracted.proof_date = max(issued)
+        extracted.proof_age_days = (today - extracted.proof_date).days
+
+    valid = expires >= today
+    return CheckResult(
+        name="address_document_expiration",
+        status=CheckStatus.passed if valid else CheckStatus.failed,
+        reasons=[] if valid else ["PROOF_EXPIRED"],
+        details={"expiry_date": expires},
     )
