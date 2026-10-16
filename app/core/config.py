@@ -41,6 +41,11 @@ class Settings(BaseSettings):
     # (app/core/ratelimit.py). Turn off only for load tests.
     RATE_LIMITS_ENABLED: bool = True
 
+    # How many times one step (document, address, face, due diligence) may be failed before the
+    # verification is sent to a person. Without a cap, someone could keep submitting documents
+    # until one passed, and each attempt runs the OCR and face models.
+    MAX_STEP_ATTEMPTS: int = 5
+
     # Base URL for session links (e.g. http://localhost:4501). If empty, request base_url is used.
     VERIFY_BASE_URL: str = ""
 

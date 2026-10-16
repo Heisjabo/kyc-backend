@@ -14,7 +14,7 @@ import secrets
 import string
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -236,6 +236,37 @@ def expire_overdue(db: Session, limit: int = 500) -> int:
         verification.completed_at = datetime.now(UTC)
     db.commit()
     return len(overdue)
+
+
+ATTEMPTS_EXHAUSTED = "ATTEMPTS_EXHAUSTED"
+
+
+def attempts_exhausted(db: Session, verification: Verification, step: VerificationStep) -> bool:
+    """True when this step has been failed MAX_STEP_ATTEMPTS times.
+
+    The first time that is noticed the verification is sent to a person (needs_review, with
+    ATTEMPTS_EXHAUSTED among its reasons) and the client is told, so a person cannot keep
+    submitting documents until one passes.
+    """
+    failed = db.scalar(
+        select(func.count())
+        .select_from(Step)
+        .where(
+            Step.verification_id == verification.id,
+            Step.step == step,
+            Step.status == StepStatus.failed,
+        )
+    ) or 0
+    if failed < settings.MAX_STEP_ATTEMPTS:
+        return False
+    if verification.status != VerificationStatus.needs_review:
+        verification.status = VerificationStatus.needs_review
+        verification.event = EVENT_STATUS_CHANGED
+        verification.completed_at = datetime.now(UTC)
+        verification.reasons = list(dict.fromkeys([*(verification.reasons or []), ATTEMPTS_EXHAUSTED]))
+        db.commit()
+        notify_client(db, verification)
+    return True
 
 
 def open_step(db: Session, verification: Verification, step: VerificationStep) -> Step:

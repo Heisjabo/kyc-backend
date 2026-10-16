@@ -96,6 +96,15 @@ def _require_turn(verification: Verification, step: VerificationStep) -> None:
             )
 
 
+def _attempts_left(db: Session, verification: Verification, step: VerificationStep) -> None:
+    """Stop at the attempt limit. The verification has by then gone to a person."""
+    if service.attempts_exhausted(db, verification, step):
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "You have used all your attempts. Your verification has been passed to a person to look at.",
+        )
+
+
 def _passed(verification: Verification, step: VerificationStep) -> bool:
     """Done, as far as the order of steps goes: passed, or flagged for a reviewer.
     A flagged step is the reviewer's to decide, not something the person can fix,
@@ -259,6 +268,7 @@ def submit_document(
     """
     verification = _open_session(db, token)
     _require_turn(verification, VerificationStep.document)
+    _attempts_left(db, verification, VerificationStep.document)
 
     front_bytes, front_type, back_bytes, back_type = _read_document(front, back, document_type)
     claimed = verification.claimed or {}
@@ -451,6 +461,7 @@ def submit_address(
     """
     verification = _open_session(db, token)
     _require_turn(verification, VerificationStep.address)
+    _attempts_left(db, verification, VerificationStep.address)
 
     claimed_address = (verification.claimed or {}).get("address")
     if not claimed_address:
@@ -509,6 +520,7 @@ def submit_face(
     """Prove a live person is there, and that they are the one on the document."""
     verification = _open_session(db, token)
     _require_turn(verification, VerificationStep.face)
+    _attempts_left(db, verification, VerificationStep.face)
 
     if not face_rules.MIN_FRAMES <= len(frames) <= face_rules.MAX_FRAMES:
         raise HTTPException(
@@ -732,6 +744,7 @@ async def submit_due_diligence(token: str, request: Request, db: Session = Depen
     """
     verification = _open_session(db, token)
     _require_turn(verification, VerificationStep.due_diligence)
+    _attempts_left(db, verification, VerificationStep.due_diligence)
     form = _session_form(db, verification)
     fields = forms.fields_of(form)
 
