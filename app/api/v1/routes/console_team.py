@@ -362,6 +362,7 @@ def accept_invite(
     db.refresh(account)
 
     access, seconds = security.issue_console_token(
-        str(account.id), account.email, account.console_role, list(account.console_products or [])
+        str(account.id), account.email, account.console_role, list(account.console_products or []),
+        account.token_version,
     )
     return ConsoleTokenResponse(access_token=access, expires_in=seconds, user=_as_user(account))

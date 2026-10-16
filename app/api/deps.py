@@ -28,6 +28,7 @@ from sqlalchemy.orm import Session
 
 from app.api.request_audit import set_actor
 from app.core import security
+from app.core.config import settings
 from app.db.models import Account, ApiKey
 from app.db.session import get_session
 
@@ -58,8 +59,20 @@ def current_account(
     account = db.get(Account, _as_id(claims.get("sub")))
     if account is None or not account.is_active:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "That account is no longer active")
+    _same_version(claims, account)
     set_actor(request, account.id, "dashboard")
     return account
+
+
+def _same_version(claims: dict, account: Account) -> None:
+    """A token from before the last password change or suspension is no longer good."""
+    # Tokens issued before this existed carry no version and are left alone.
+    if claims.get("ver") is not None and claims["ver"] != account.token_version:
+        raise HTTPException(
+            status.HTTP_401_UNAUTHORIZED,
+            "That session has ended. Sign in again.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
 
 
 def current_console_account(
@@ -89,6 +102,7 @@ def current_console_account(
     account = db.get(Account, _as_id(claims.get("sub")))
     if account is None or not account.is_active or not account.console_role:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "This account cannot use the admin console")
+    _same_version(claims, account)
     set_actor(request, account.id, "console")
     return account
 
@@ -225,3 +239,13 @@ def current_client(caller: Caller = Depends(current_caller)) -> Account:
     if caller.staff:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "This is for client accounts; staff use the console")
     return caller.account
+
+
+def legacy_only() -> None:
+    """Hide a first-generation endpoint unless ENABLE_LEGACY_ENDPOINTS is on.
+
+    These endpoints take no API key and no session token. Answering 404 rather than
+    401 says nothing about what exists at the address.
+    """
+    if not settings.ENABLE_LEGACY_ENDPOINTS:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Not found")

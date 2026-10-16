@@ -1,4 +1,6 @@
-"""Where email will be sent from.
+"""Where email is sent from, over SMTP.
+
+The original note, from before it was wired up:
 
 Nothing is sent yet. Choosing a provider, owning a sending domain, and passing
 its SPF and DKIM checks is a piece of work of its own, and a password reset that
@@ -15,27 +17,49 @@ but a developer's machine.
 """
 
 import logging
+import smtplib
+import ssl
+from email.message import EmailMessage
 
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
 
-def send_password_reset(email: str, token: str) -> bool:
-    """Send someone a link for setting a new password.
+def _send(to: str, subject: str, body: str) -> None:
+    message = EmailMessage()
+    message["From"] = settings.EMAIL_FROM
+    message["To"] = to
+    message["Subject"] = subject
+    message.set_content(body)
+    with smtplib.SMTP(settings.SMTP_HOST, settings.SMTP_PORT, timeout=15) as server:
+        if settings.SMTP_STARTTLS:
+            server.starttls(context=ssl.create_default_context())
+        if settings.SMTP_USER:
+            server.login(settings.SMTP_USER, settings.SMTP_PASSWORD)
+        server.send_message(message)
 
-    Returns whether it was actually sent, which is currently always False.
-    """
+
+def send_password_reset(email: str, token: str) -> bool:
+    """Send someone a link for setting a new password. Returns whether it was sent."""
     link = f"{settings.DASHBOARD_URL.rstrip('/')}/reset-password?token={token}"
-    if not settings.EMAIL_ENABLED:
+    if not (settings.EMAIL_ENABLED and settings.SMTP_HOST):
         # The token itself is never logged: a log with a working reset link in it
         # is a way into an account.
         logger.info("Password reset requested for %s. Email is off, so nothing was sent.", email)
         return False
-
-    # TODO: hand `link` to the provider once there is one.
-    logger.warning("EMAIL_ENABLED is set but no provider is wired up yet; %s got nothing", email)
-    return False
+    try:
+        _send(
+            email,
+            "Reset your password",
+            f"Someone asked to reset the password for this address.\n\nOpen this link to choose a new one "
+            f"(it works once, for {settings.PASSWORD_RESET_MINUTES} minutes):\n{link}\n\n"
+            "If it was not you, ignore this message and your password stays as it is.",
+        )
+    except (OSError, smtplib.SMTPException):
+        logger.exception("Could not send the password reset email to %s", email)
+        return False
+    return True
 
 
 def reveal_token_to_caller() -> bool:

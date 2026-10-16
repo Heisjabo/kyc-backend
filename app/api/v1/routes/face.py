@@ -1,4 +1,4 @@
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
+from fastapi import Depends, APIRouter, File, Form, HTTPException, UploadFile, status
 
 from app.pipeline.frame_probe import probe_frame
 from app.pipeline.liveness import check_liveness
@@ -7,12 +7,17 @@ from app.rules import face as rules
 from app.schemas.face import FrameProbeResponse, LivenessResponse
 from app.storage import sessions
 
+from app.api.deps import legacy_only
+from app.core import ratelimit
+
+# /frame is not behind legacy_only: the live product calls it for head-pose guidance and
+# it returns only quality and pose numbers.
 router = APIRouter(prefix="/face")
 
 
 # A plain `def`: FastAPI runs it in a worker thread, so face detection on a
 # burst of frames doesn't block other requests.
-@router.post("/liveness", response_model=LivenessResponse)
+@router.post("/liveness", response_model=LivenessResponse, dependencies=[Depends(legacy_only)])
 def liveness(
     frames: list[UploadFile] = File(
         ...,
@@ -49,7 +54,7 @@ def liveness(
     return check_liveness(payloads, challenge_type=challenge)
 
 
-@router.post("/frame", response_model=FrameProbeResponse)
+@router.post("/frame", response_model=FrameProbeResponse, dependencies=[ratelimit.limit("frame-ip", 900, 60)])
 def frame(
     frame: UploadFile = File(..., description="One camera frame, for live guidance"),
     verification_id: str | None = Form(None, description="Ties the frame to a scanned document"),

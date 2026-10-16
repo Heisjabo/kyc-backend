@@ -5,7 +5,7 @@ from pathlib import Path
 
 import cv2
 
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
+from fastapi import Depends, APIRouter, File, Form, HTTPException, UploadFile, status
 
 from app.engines.face import crop_face, detect_faces, portrait
 from app.engines.image import InvalidImageError, decode_image
@@ -19,7 +19,9 @@ from app.schemas.document import CheckStatus, Decision, ExtractedFields
 from app.schemas.face import FaceVerificationResponse
 from app.storage import evidence, sessions
 
-router = APIRouter(prefix="/verifications")
+from app.api.deps import legacy_only
+
+router = APIRouter(prefix="/verifications", dependencies=[Depends(legacy_only)])
 
 
 def open_session(document_type: str, decision: str, fields: ExtractedFields | None, front: bytes):

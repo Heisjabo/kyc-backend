@@ -25,7 +25,7 @@ from app.db.models import Account, ApiKey, PasswordReset
 from app.db.session import get_session
 from app.main import app
 
-GOOD_PASSWORD = "horse-battery"          # 13, inside the 8 to 16 rule
+GOOD_PASSWORD = "horse-battery"          # 13, inside the 12 to 128 rule
 SIGN_UP = {
     "email": "Jean@Tuesday.africa",
     "password": GOOD_PASSWORD,
@@ -129,16 +129,25 @@ def test_an_address_can_only_have_one_account(client):
     assert register(client, email="JEAN@tuesday.africa").status_code == 409   # case does not matter
 
 
-@pytest.mark.parametrize("password", ["short", "1234567"])
-def test_a_password_under_eight_characters_is_refused(client, password):
+@pytest.mark.parametrize("password", ["short", "elevenchars"])
+def test_a_password_under_twelve_characters_is_refused(client, password):
     assert register(client, password=password).status_code == 422
 
 
-def test_a_password_over_sixteen_characters_is_refused(client):
-    """The same 8 to 16 rule tuesday-backend applies, so a person meets one rule
-    across Tuesday rather than a different one per service."""
-    assert register(client, password="x" * 17).status_code == 422
-    assert register(client, password="x" * 16).status_code == 201
+def test_long_passphrases_are_allowed_up_to_128(client):
+    assert register(client, password="correct horse battery staple " * 4).status_code == 201   # 116
+    assert register(client, email="b@tuesday.africa", password="a1b2c3d4" * 17).status_code == 422  # 136
+
+
+@pytest.mark.parametrize("password", ["password1234", "Password123456", "qwertyuiop123", "welcome2025!!", "aaaaaaaaaaaaaa"])
+def test_a_common_or_repetitive_password_is_refused(client, password):
+    response = register(client, password=password)
+    assert response.status_code == 422 and ("common" in str(response.json()) or "repeats" in str(response.json()))
+
+
+def test_a_new_password_is_checked_on_reset_too(client):
+    register(client)
+    assert client.post("/v1/auth/reset-password", json={"token": "made-up", "password": "password1234"}).status_code == 422
 
 
 @pytest.mark.parametrize("missing", ["first_name", "last_name", "phone", "country_code", "date_of_birth", "country"])
@@ -362,3 +371,16 @@ def test_the_auth_endpoints_are_in_the_api_schema(client):
                  "/v1/auth/forgot-password", "/v1/auth/reset-password",
                  "/v1/api-keys", "/v1/api-keys/{key_id}"):
         assert path in paths
+
+
+# Tokens that outlive a password
+
+def test_a_token_stops_working_when_the_password_is_reset(client):
+    token = signed_in(client)
+    assert client.get("/v1/auth/me", headers=auth(token)).status_code == 200
+    reset = client.post("/v1/auth/forgot-password", json={"email": "jean@tuesday.africa"}).json()["reset_token"]
+    assert client.post("/v1/auth/reset-password", json={"token": reset, "password": "brand-new-pass"}).status_code == 200
+
+    assert client.get("/v1/auth/me", headers=auth(token)).status_code == 401
+    new = client.post("/v1/auth/login", json={"email": "jean@tuesday.africa", "password": "brand-new-pass"})
+    assert client.get("/v1/auth/me", headers=auth(new.json()["access_token"])).status_code == 200

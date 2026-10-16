@@ -14,12 +14,12 @@ Two deliberate refusals to be helpful:
 
 from datetime import UTC, datetime, timedelta
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.api.deps import current_account
-from app.core import security
+from app.core import ratelimit, security
 from app.core.config import settings
 from app.db.models import Account, PasswordReset
 from app.db.session import get_session
@@ -57,7 +57,12 @@ def _as_response(account: Account) -> AccountResponse:
     )
 
 
-@router.post("/register", response_model=TokenResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/register",
+    response_model=TokenResponse,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[ratelimit.limit("register", 5, 3600)],
+)
 def register(body: RegisterRequest, db: Session = Depends(get_session)) -> TokenResponse:
     """Open an account and sign in straight away."""
     email = body.email.lower().strip()
@@ -88,16 +93,20 @@ def register(body: RegisterRequest, db: Session = Depends(get_session)) -> Token
     return _token_for(account, db)
 
 
-@router.post("/login", response_model=TokenResponse)
-def login(body: LoginRequest, db: Session = Depends(get_session)) -> TokenResponse:
-    account = db.scalar(select(Account).where(Account.email == body.email.lower().strip()))
+@router.post("/login", response_model=TokenResponse, dependencies=[ratelimit.limit("login", 10, 60)])
+def login(body: LoginRequest, request: Request, db: Session = Depends(get_session)) -> TokenResponse:
+    email = body.email.lower().strip()
+    ratelimit.check_sign_in_allowed(request, email)
+    account = db.scalar(select(Account).where(Account.email == email))
     # The password is verified even when there is no such account, so that a
     # wrong address and a wrong password take the same time to answer.
     stored = account.password_hash if account else security.hash_password("no such account")
     correct = security.verify_password(body.password, stored)
 
     if account is None or not correct:
+        ratelimit.record_failed_sign_in(request, email)
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Email or password is wrong")
+    ratelimit.clear_failed_sign_ins(request, email)
     if not account.is_active:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "This account has been suspended")
 
@@ -107,15 +116,41 @@ def login(body: LoginRequest, db: Session = Depends(get_session)) -> TokenRespon
     return _token_for(account, db)
 
 
+@router.get("/callback-secret")
+def callback_secret(account: Account = Depends(current_account)) -> dict:
+    """The key this account's callbacks are signed with.
+
+    Each callback carries X-KYC-Timestamp and X-KYC-Signature (sha256=<hex>), an
+    HMAC-SHA256 of "<timestamp>.<raw body>" under this key. Check it, and refuse a
+    timestamp more than a few minutes old.
+    """
+    return {
+        "secret": security.callback_secret(account.id),
+        "signature_header": "X-KYC-Signature",
+        "timestamp_header": "X-KYC-Timestamp",
+        "signed": "<timestamp>.<raw request body>",
+        "algorithm": "HMAC-SHA256, hex, prefixed sha256=",
+    }
+
+
 @router.get("/me", response_model=AccountResponse)
 def me(account: Account = Depends(current_account)) -> AccountResponse:
     return _as_response(account)
 
 
-@router.post("/forgot-password", response_model=ForgotPasswordResponse)
-def forgot_password(body: ForgotPasswordRequest, db: Session = Depends(get_session)) -> ForgotPasswordResponse:
+@router.post(
+    "/forgot-password",
+    response_model=ForgotPasswordResponse,
+    dependencies=[ratelimit.limit("forgot", 5, 3600)],
+)
+def forgot_password(
+    body: ForgotPasswordRequest, request: Request, db: Session = Depends(get_session)
+) -> ForgotPasswordResponse:
     """Start a password reset. The answer never says whether the address is known."""
-    account = db.scalar(select(Account).where(Account.email == body.email.lower().strip()))
+    email = body.email.lower().strip()
+    # Three a day per address, so the reset email cannot be used to flood somebody.
+    ratelimit.limit_per_email(request, "forgot", email, 3, 3600)
+    account = db.scalar(select(Account).where(Account.email == email))
     revealed = None
 
     if account is not None and account.is_active:
@@ -135,7 +170,11 @@ def forgot_password(body: ForgotPasswordRequest, db: Session = Depends(get_sessi
     return ForgotPasswordResponse(message=_SAME_ANSWER, reset_token=revealed)
 
 
-@router.post("/reset-password", response_model=AccountResponse)
+@router.post(
+    "/reset-password",
+    response_model=AccountResponse,
+    dependencies=[ratelimit.limit("reset", 10, 3600)],
+)
 def reset_password(body: ResetPasswordRequest, db: Session = Depends(get_session)) -> AccountResponse:
     """Set a new password with a token from the reset email.
 
@@ -180,5 +219,5 @@ def _token_for(account: Account, db: Session) -> TokenResponse:
     account.last_login_at = datetime.now(UTC)
     db.commit()
     db.refresh(account)
-    token, seconds = security.issue_access_token(str(account.id), account.email)
+    token, seconds = security.issue_access_token(str(account.id), account.email, account.token_version)
     return TokenResponse(access_token=token, expires_in=seconds, account=_as_response(account))

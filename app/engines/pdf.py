@@ -12,9 +12,34 @@ more accurate than OCR could be.
 
 import numpy as np
 
+from app.core.config import settings
+
 from app.rules import address as rules
 
 _MAGIC = b"%PDF-"
+
+
+class PdfUnreadable(ValueError):
+    """The file starts like a PDF but cannot be opened: no pages, damaged, or encrypted.
+
+    pdfium's own error escaped from here, and an address proof that was a PDF with nothing
+    in it came back as HTTP 500.
+    """
+
+
+def _open(data: bytes):
+    import pypdfium2 as pdfium
+
+    try:
+        document = pdfium.PdfDocument(data)
+        if len(document) == 0:
+            document.close()
+            raise PdfUnreadable("the PDF has no pages")
+        return document
+    except PdfUnreadable:
+        raise
+    except Exception as problem:  # pdfium raises PdfiumError, and others for odd files
+        raise PdfUnreadable(f"the PDF could not be opened: {problem}") from None
 
 
 def is_pdf(data: bytes) -> bool:
@@ -28,11 +53,9 @@ def is_pdf(data: bytes) -> bool:
 
 def text_lines(data: bytes, max_pages: int | None = None) -> list[str]:
     """The text already inside the PDF, one line per line. Empty for a scan."""
-    import pypdfium2 as pdfium
-
     max_pages = max_pages or rules.PDF_MAX_PAGES
     lines: list[str] = []
-    document = pdfium.PdfDocument(data)
+    document = _open(data)
     try:
         for index in range(min(len(document), max_pages)):
             page = document[index]
@@ -49,14 +72,17 @@ def render_pages(data: bytes, max_pages: int | None = None) -> list[np.ndarray]:
     Rendered at PDF_RENDER_SCALE, which is what puts the print at roughly the
     resolution the OCR was tuned on for photographs of documents.
     """
-    import pypdfium2 as pdfium
-
     max_pages = max_pages or rules.PDF_MAX_PAGES
     images: list[np.ndarray] = []
-    document = pdfium.PdfDocument(data)
+    document = _open(data)
     try:
         for index in range(min(len(document), max_pages)):
-            rendered = document[index].render(scale=rules.PDF_RENDER_SCALE)
+            page = document[index]
+            width, height = page.get_size()   # points; the render is this times the scale
+            side = max(width, height) * rules.PDF_RENDER_SCALE
+            if side > settings.MAX_IMAGE_SIDE_PX or width * height * rules.PDF_RENDER_SCALE**2 > settings.MAX_IMAGE_PIXELS:
+                raise PdfUnreadable("the PDF page is too large")
+            rendered = page.render(scale=rules.PDF_RENDER_SCALE)
             # The OCR and the quality checks work in BGR, as OpenCV reads images.
             images.append(np.asarray(rendered.to_pil().convert("RGB"))[:, :, ::-1].copy())
     finally:

@@ -62,7 +62,7 @@ def needs_rehash(stored: str) -> bool:
 
 # Session tokens
 
-def issue_access_token(account_id: str, email: str) -> tuple[str, int]:
+def issue_access_token(account_id: str, email: str, version: str = "") -> tuple[str, int]:
     """A signed token for the dashboard, and how many seconds it lasts."""
     seconds = settings.ACCESS_TOKEN_MINUTES * 60
     now = datetime.now(UTC)
@@ -72,6 +72,7 @@ def issue_access_token(account_id: str, email: str) -> tuple[str, int]:
         "iat": now,
         "exp": now + timedelta(seconds=seconds),
         "typ": "access",
+        "ver": version,
     }
     return jwt.encode(payload, settings.JWT_SECRET, algorithm="HS256"), seconds
 
@@ -93,7 +94,9 @@ def read_access_token(token: str) -> dict | None:
 # products travel in the token for the console's convenience only; the endpoints
 # read them again from the account, so a change takes effect at once.
 
-def issue_console_token(account_id: str, email: str, role: str, products: list[str]) -> tuple[str, int]:
+def issue_console_token(
+    account_id: str, email: str, role: str, products: list[str], version: str = ""
+) -> tuple[str, int]:
     """A signed token for the admin console, and how many seconds it lasts."""
     seconds = settings.ACCESS_TOKEN_MINUTES * 60
     now = datetime.now(UTC)
@@ -105,6 +108,7 @@ def issue_console_token(account_id: str, email: str, role: str, products: list[s
         "iat": now,
         "exp": now + timedelta(seconds=seconds),
         "typ": "console",
+        "ver": version,
     }
     return jwt.encode(payload, settings.JWT_SECRET, algorithm="HS256"), seconds
 
@@ -152,6 +156,27 @@ def same_secret(offered: str, stored: str) -> bool:
     """Constant time, so a wrong key cannot be found one character at a time by
     measuring how long the answer takes."""
     return hmac.compare_digest(offered, stored)
+
+
+# Callback signatures
+#
+# Each account signs with a key of its own, derived from the server secret and the
+# account id, so a client can check that a callback came from us and one client
+# cannot forge a callback to another. The client reads its key from
+# GET /v1/auth/callback-secret.
+
+def callback_secret(account_id) -> str:
+    return hmac.new(
+        settings.JWT_SECRET.encode(), f"callback-v1:{account_id}".encode(), hashlib.sha256
+    ).hexdigest()
+
+
+def sign_callback(account_id, body: bytes, timestamp: int) -> str:
+    """sha256=<hex>, over "<timestamp>.<body>". The timestamp is sent too, so the
+    receiver can refuse an old copy."""
+    key = callback_secret(account_id).encode()
+    digest = hmac.new(key, f"{timestamp}.".encode() + body, hashlib.sha256).hexdigest()
+    return f"sha256={digest}"
 
 
 # Single-use tokens, for password resets
@@ -237,12 +262,18 @@ def check_configuration() -> None:
             "JWT_SECRET is the published default or too short, and ENVIRONMENT is "
             f"{settings.ENVIRONMENT!r}. Set a long random JWT_SECRET before starting."
         )
-    if not settings.EMAIL_ENABLED:
-        # Not fatal: the service is useful without password resets. But nobody
-        # should discover this when a customer cannot get back into their account.
+    if not (settings.EMAIL_ENABLED and settings.SMTP_HOST):
+        # Not fatal: the service is useful without password resets, and email is set up separately.
         import logging
 
         logging.getLogger(__name__).warning(
-            "EMAIL_ENABLED is off outside development: password resets will be "
-            "created but never delivered."
+            "Email is not configured outside development: password resets will be created but "
+            "never delivered. Set EMAIL_ENABLED=true and the SMTP_ settings."
+        )
+    if settings.CORS_ORIGINS.strip() == "*":
+        import logging
+
+        logging.getLogger(__name__).warning(
+            "CORS_ORIGINS is '*' outside development: any website may call this API from a browser. "
+            "Set it to the front-end addresses."
         )

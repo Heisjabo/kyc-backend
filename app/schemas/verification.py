@@ -10,6 +10,7 @@ from typing import Literal
 
 from pydantic import BaseModel, EmailStr, Field, field_validator, model_validator
 
+from app.core import urls
 from app.core.config import settings
 from app.schemas.console import ConsoleApplicant, ConsoleCheck, ConsoleClient, ConsoleDocument, ConsoleFile, ConsoleReviewEvent
 from app.screening.yente import ScreeningResult
@@ -64,6 +65,18 @@ class CreateVerificationRequest(BaseModel):
     # time. ttl_days is the same setting for people who would rather say "7".
     ttl: int | None = Field(default=None, ge=1, description="Minutes the session stays open")
     ttl_days: int | None = Field(default=None, ge=1, le=30, description="Days the session stays open")
+
+    @field_validator("callback_url", "redirect_url")
+    @classmethod
+    def _safe_url(cls, value, info):
+        """Where we send data (callback) and where we send the person (redirect)."""
+        if value is None or value == "":
+            return None
+        check = urls.check_callback if info.field_name == "callback_url" else urls.check_redirect
+        try:
+            return check(value)
+        except urls.UnsafeUrl as problem:
+            raise ValueError(f"{info.field_name} {problem}") from None
 
     @field_validator("document_types", "address_types")
     @classmethod
@@ -158,6 +171,7 @@ class SessionResponse(BaseModel):
     next_step: str | None
     completed_steps: list[str]
     expired: bool
+    expires_at: datetime | None = None
     redirect_url: str | None
     # The identity documents offered on the document step; None offers all of them.
     document_types: list[str] | None = None

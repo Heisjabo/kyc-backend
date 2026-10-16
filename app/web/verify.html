@@ -72,6 +72,10 @@
 </main>
 
 <script>
+  // A redirect is followed only if it is a plain http(s) address: never javascript: or data:.
+  function safeRedirect(url) {
+    try { const u = new URL(url); return (u.protocol === 'https:' || u.protocol === 'http:') ? u.href : null; } catch (e) { return null; }
+  }
 let verificationId = location.pathname.split('/').pop();
 // Part of a verification session: results go to that session instead of a
 // document scanned on this machine a moment ago.
@@ -150,7 +154,7 @@ async function loadSession() {
       const sessRes = await fetch(`/v1/sessions/${SESSION_TOKEN}`);
       if (sessRes.ok) {
         const sessData = await sessRes.json();
-        if (sessData.redirect_url) sessionRedirectUrl = sessData.redirect_url;
+        if (safeRedirect(sessData.redirect_url)) sessionRedirectUrl = safeRedirect(sessData.redirect_url);
       }
     } catch (e) {}
 
@@ -602,7 +606,7 @@ function show(body, ok) {
   window.scrollTo({ top: 0, behavior: 'smooth' });
 
   const targetRedirect = pendingJourney ? `/verify/${SESSION_TOKEN}`
-    : body.redirect_url || sessionRedirectUrl;
+    : safeRedirect(body.redirect_url) || sessionRedirectUrl;
   const finished = SESSION_TOKEN
     ? ['passed', 'needs_review'].includes(body.verification_status) || pendingJourney
     : body.decision === 'pass';

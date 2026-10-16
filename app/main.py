@@ -5,6 +5,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.pages import router as pages_router
+from app.api.security_headers import SecurityHeadersMiddleware
 from app.api.request_audit import RequestAuditMiddleware, flush_bursts, flush_bursts_forever
 from app.api.v1.router import api_router
 from app.core.config import settings
@@ -24,12 +25,18 @@ async def lifespan(app: FastAPI):
     flush_bursts(everything=True)
 
 
+def docs_enabled() -> bool:
+    if settings.ENABLE_DOCS is None:
+        return settings.ENVIRONMENT == "development"
+    return settings.ENABLE_DOCS
+
+
 def create_app() -> FastAPI:
     check_configuration()
     app = FastAPI(
         title=settings.APP_NAME,
         version=settings.APP_VERSION,
-        docs_url="/docs" if settings.ENABLE_DOCS else None,
+        docs_url="/docs" if docs_enabled() else None,
         redoc_url=None,
         lifespan=lifespan,
     )
@@ -47,6 +54,9 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
         max_age=600,
     )
+
+    # Outermost, so error responses and CORS preflights carry the headers too.
+    app.add_middleware(SecurityHeadersMiddleware)
 
     app.include_router(api_router, prefix="/v1")
     app.include_router(pages_router)

@@ -1,6 +1,6 @@
 from datetime import date
 
-from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile, status
+from fastapi import Depends, APIRouter, File, Form, HTTPException, Request, UploadFile, status
 
 from app.api.v1.routes.verifications import open_session
 from app.pipeline.document import scan_document
@@ -8,6 +8,12 @@ from app.pipeline.document_probe import probe_document_frame
 from app.rules import document as rules
 from app.schemas.document import Applicant, DocumentCheckResponse, DocumentFrameProbe, DocumentType
 
+from app.api.deps import legacy_only
+from app.core import ratelimit
+
+# /frame is not behind legacy_only: the live product's capture screen calls it several
+# times a second for camera guidance, and it returns only quality figures (blur, light,
+# how much of the frame the card fills), never anything read from the document.
 router = APIRouter(prefix="/document")
 
 
@@ -27,7 +33,7 @@ def _read_upload(upload: UploadFile, field: str) -> bytes:
 
 # A plain `def` (not async): FastAPI runs it in a worker thread, so the
 # CPU-heavy OCR doesn't block other requests.
-@router.post("/scan", response_model=DocumentCheckResponse)
+@router.post("/scan", response_model=DocumentCheckResponse, dependencies=[Depends(legacy_only)])
 def scan(
     request: Request,
     document_type: DocumentType = Form(...),
@@ -62,7 +68,7 @@ def scan(
     return result
 
 
-@router.post("/frame", response_model=DocumentFrameProbe)
+@router.post("/frame", response_model=DocumentFrameProbe, dependencies=[ratelimit.limit("frame-ip", 900, 60)])
 def frame(
     frame: UploadFile = File(..., description="One camera frame, cropped to the guide rectangle"),
     side: str = Form("front", description='"front" or "back". A back carries no portrait, so that check is skipped.'),
@@ -83,7 +89,7 @@ def frame(
 # rule is turned off. Folding that into /scan with a flag would mean one endpoint
 # whose rules change under the caller, which is how a check gets skipped by
 # accident.
-@router.post("/birth-certificate", response_model=DocumentCheckResponse)
+@router.post("/birth-certificate", response_model=DocumentCheckResponse, dependencies=[Depends(legacy_only)])
 def birth_certificate(
     request: Request,
     front: UploadFile = File(..., description="The birth certificate"),

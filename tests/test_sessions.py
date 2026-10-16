@@ -199,7 +199,7 @@ def test_the_session_view_carries_nothing_about_the_client(client, api_key):
     body = open_verification(client, api_key)
     session = client.get(f"/v1/sessions/{token_of(body)}").json()
     assert set(session) == {"reference", "status", "services", "next_step",
-                            "completed_steps", "expired", "redirect_url", "document_types",
+                            "completed_steps", "expired", "expires_at", "redirect_url", "document_types",
                             "address_types"}
 
 
@@ -561,3 +561,70 @@ def test_a_selfie_that_could_not_be_scored_says_nothing_either_way(client, api_k
     step, check = face_step_row(client, api_key, db_session, monkeypatch, skipped)
     assert step.ai_generated is None
     assert check.deepfake_checked is False
+
+
+# A person cannot keep trying until something passes
+
+def test_a_step_that_keeps_failing_ends_with_a_person_looking_at_it(client, api_key, db_session, monkeypatch):
+    monkeypatch.setattr(settings, "MAX_STEP_ATTEMPTS", 3)
+    stub_document(monkeypatch, decision=Decision.failed, reasons=["NAME_MISMATCH"])
+    body = open_verification(client, api_key)
+    token = token_of(body)
+
+    def attempt():
+        return client.post(
+            f"/v1/sessions/{token}/document", data={"document_type": "passport"},
+            files={"front": ("front.jpg", image_bytes(), "image/jpeg")},
+        )
+
+    assert [attempt().status_code for _ in range(3)] == [200, 200, 200]
+    refused = attempt()
+    assert refused.status_code == 409
+    assert "used all your attempts" in refused.json()["detail"]
+
+    verification = db_session.scalar(select(Verification).where(Verification.reference == body["reference"]))
+    db_session.refresh(verification)
+    assert verification.status == VerificationStatus.needs_review
+    assert "ATTEMPTS_EXHAUSTED" in verification.reasons
+    from app.db.models import VerificationStep
+    documents = db_session.scalar(
+        select(func.count()).select_from(Step)
+        .where(Step.verification_id == verification.id, Step.step == VerificationStep.document)
+    )
+    assert documents == 3    # the refused fourth attempt wrote nothing
+    # And it stays refused.
+    assert attempt().status_code == 409
+
+
+def test_a_passed_step_is_not_counted_against_the_person(client, api_key, monkeypatch):
+    monkeypatch.setattr(settings, "MAX_STEP_ATTEMPTS", 2)
+    stub_document(monkeypatch, decision=Decision.passed)
+    token = token_of(open_verification(client, api_key))
+    response = client.post(
+        f"/v1/sessions/{token}/document", data={"document_type": "passport"},
+        files={"front": ("front.jpg", image_bytes(), "image/jpeg")},
+    )
+    assert response.status_code == 200
+
+
+def test_the_default_cap_is_five():
+    assert type(settings).model_fields["MAX_STEP_ATTEMPTS"].default == 5
+
+
+def test_the_person_gets_the_decision_and_reasons_but_not_the_data_read(client, api_key, db_session, monkeypatch):
+    """Reasons stay so the person can fix things; extracted data and checks stay with the client."""
+    stub_document(monkeypatch)
+    body = open_verification(client, api_key)
+    response = client.post(
+        f"/v1/sessions/{token_of(body)}/document",
+        data={"document_type": "id_card"},
+        files={"front": ("front.jpg", image_bytes(), "image/jpeg"),
+               "back": ("back.jpg", image_bytes(), "image/jpeg")},
+    ).json()
+    assert response["decision"] == "pass" and "reasons" in response
+    assert response["extracted"] is None and response["checks"] == []
+    assert "1199980012345678" not in str(response)
+
+    verification = db_session.scalar(select(Verification).where(Verification.reference == body["reference"]))
+    step = db_session.scalar(select(Step).where(Step.verification_id == verification.id, Step.step == "document"))
+    assert step.extracted["document_number"] == "1199980012345678"

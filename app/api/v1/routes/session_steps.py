@@ -16,6 +16,7 @@ import json
 import time
 
 import numpy as np
+from app.core import ratelimit
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -52,6 +53,7 @@ from app.schemas.due_diligence import Answer, DueDiligenceResult, SessionForm
 from app.schemas.face import FaceVerificationResponse
 from app.services import due_diligence as forms
 from app.services import network
+from app.services import person_view
 from app.services import verifications as service
 from app.storage import evidence, sessions
 
@@ -93,6 +95,15 @@ def _require_turn(verification: Verification, step: VerificationStep) -> None:
                 status.HTTP_409_CONFLICT,
                 f"The {name} step has to be completed first",
             )
+
+
+def _attempts_left(db: Session, verification: Verification, step: VerificationStep) -> None:
+    """Stop at the attempt limit. The verification has by then gone to a person."""
+    if service.attempts_exhausted(db, verification, step):
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "You have used all your attempts. Your verification has been passed to a person to look at.",
+        )
 
 
 def _passed(verification: Verification, step: VerificationStep) -> bool:
@@ -146,8 +157,8 @@ def _pdf_pages(data: bytes, field: str) -> list[bytes]:
 
     try:
         pages = pdf.render_pages(data, max_pages=document_rules.PDF_MAX_PAGES)
-    except Exception:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, f"{field} could not be opened as a PDF")
+    except pdf.PdfUnreadable:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, f"{field} could not be opened as a PDF") from None
     images = []
     for page in pages:
         ok, buffer = cv2.imencode(".jpg", page, [cv2.IMWRITE_JPEG_QUALITY, 92])
@@ -224,7 +235,11 @@ def _device(request: Request) -> dict:
     }
 
 
-@router.post("/{token}/device", status_code=status.HTTP_204_NO_CONTENT)
+@router.post(
+    "/{token}/device",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[ratelimit.limit("device-token", 30, 60, by="token")],
+)
 def report_device(token: str, signals: DeviceSignals, request: Request, db: Session = Depends(get_session)) -> None:
     """The browser describing itself, sent by the session page each time it opens.
 
@@ -236,7 +251,7 @@ def report_device(token: str, signals: DeviceSignals, request: Request, db: Sess
     network.record(db, verification, request, signals)
 
 
-@router.post("/{token}/document", response_model=DocumentCheckResponse)
+@router.post("/{token}/document", response_model=DocumentCheckResponse, dependencies=[ratelimit.limit("step-token", 20, 60, by="token"), ratelimit.limit("step-ip", 120, 60)])
 def submit_document(
     token: str,
     request: Request,
@@ -261,6 +276,7 @@ def submit_document(
             status.HTTP_422_UNPROCESSABLE_ENTITY,
             f"{document_type.value} is not accepted on this verification. Accepted: {', '.join(allowed)}",
         )
+    _attempts_left(db, verification, VerificationStep.document)
 
     front_bytes, front_type, back_bytes, back_type = _read_document(front, back, document_type)
     claimed = verification.claimed or {}
@@ -340,7 +356,7 @@ def submit_document(
     result.warnings = list(dict.fromkeys(warnings))
     result.portrait = portrait_kept
     result.verification_id = verification.reference
-    return result
+    return person_view.document(result)
 
 
 def _keep_document_portrait(db: Session, verification: Verification, step: Step, front: bytes) -> str:
@@ -420,7 +436,7 @@ def _fill_applicant(db: Session, verification: Verification, extracted: dict) ->
     db.flush()
 
 
-@router.post("/{token}/address", response_model=AddressCheckResponse)
+@router.post("/{token}/address", response_model=AddressCheckResponse, dependencies=[ratelimit.limit("step-token", 20, 60, by="token"), ratelimit.limit("step-ip", 120, 60)])
 def submit_address(
     token: str,
     request: Request,
@@ -453,6 +469,7 @@ def submit_address(
     """
     verification = _open_session(db, token)
     _require_turn(verification, VerificationStep.address)
+    _attempts_left(db, verification, VerificationStep.address)
 
     # As Shufti's address supported_types: the client's list, or every proof but a licence.
     allowed_proofs = (verification.settings or {}).get("address_types") or list(address_rules.PROOF_TYPES)
@@ -500,10 +517,10 @@ def submit_address(
         extracted=result.extracted.model_dump(mode="json"),
     )
     service.settle(db, verification)
-    return result
+    return person_view.address(result)
 
 
-@router.post("/{token}/face", response_model=FaceVerificationResponse)
+@router.post("/{token}/face", response_model=FaceVerificationResponse, dependencies=[ratelimit.limit("step-token", 20, 60, by="token"), ratelimit.limit("step-ip", 120, 60)])
 def submit_face(
     token: str,
     request: Request,
@@ -519,6 +536,7 @@ def submit_face(
     """Prove a live person is there, and that they are the one on the document."""
     verification = _open_session(db, token)
     _require_turn(verification, VerificationStep.face)
+    _attempts_left(db, verification, VerificationStep.face)
 
     if not face_rules.MIN_FRAMES <= len(frames) <= face_rules.MAX_FRAMES:
         raise HTTPException(
@@ -630,7 +648,7 @@ def submit_face(
     )
     verification = service.settle(db, verification)
 
-    return FaceVerificationResponse(
+    return person_view.face(FaceVerificationResponse(
         verification_id=verification.reference,
         verification_status=verification.status.value,
         decision=Decision.passed if passed else Decision.failed,
@@ -641,7 +659,7 @@ def submit_face(
         document=None,
         processing_ms=int((time.perf_counter() - started) * 1000),
         redirect_url=verification.redirect_url,
-    )
+    ))
 
 
 def _document_template(db: Session, verification: Verification) -> list | None:
@@ -698,7 +716,7 @@ def _session_form(db: Session, verification: Verification):
     return form
 
 
-@router.get("/{token}/due-diligence", response_model=SessionForm)
+@router.get("/{token}/due-diligence", response_model=SessionForm, dependencies=[ratelimit.limit("session-ip", 600, 60)])
 def read_due_diligence_form(token: str, db: Session = Depends(get_session)) -> SessionForm:
     """The questions this person is asked, as the client's form has them now.
 
@@ -720,7 +738,7 @@ def read_due_diligence_form(token: str, db: Session = Depends(get_session)) -> S
     )
 
 
-@router.post("/{token}/due-diligence", response_model=DueDiligenceResult)
+@router.post("/{token}/due-diligence", response_model=DueDiligenceResult, dependencies=[ratelimit.limit("step-token", 20, 60, by="token"), ratelimit.limit("step-ip", 120, 60)])
 async def submit_due_diligence(token: str, request: Request, db: Session = Depends(get_session)) -> DueDiligenceResult:
     """Answer the due diligence form.
 
@@ -742,6 +760,7 @@ async def submit_due_diligence(token: str, request: Request, db: Session = Depen
     """
     verification = _open_session(db, token)
     _require_turn(verification, VerificationStep.due_diligence)
+    _attempts_left(db, verification, VerificationStep.due_diligence)
     form = _session_form(db, verification)
     fields = forms.fields_of(form)
 

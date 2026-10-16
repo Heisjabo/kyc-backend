@@ -2,6 +2,8 @@ import io
 
 import cv2
 import numpy as np
+
+from app.core.config import settings
 from PIL import Image, ImageOps, UnidentifiedImageError
 
 
@@ -13,6 +15,11 @@ def decode_image(data: bytes) -> np.ndarray:
     """Decode uploaded bytes into an OpenCV BGR image, honouring EXIF rotation."""
     try:
         with Image.open(io.BytesIO(data)) as pil_image:
+            # The header says how big it will be before anything is decoded. Refuse a
+            # picture that would take gigabytes of memory to open.
+            width, height = pil_image.size
+            if max(width, height) > settings.MAX_IMAGE_SIDE_PX or width * height > settings.MAX_IMAGE_PIXELS:
+                raise InvalidImageError("The image is too large; send a smaller photo")
             # Phone photos are often stored sideways with an EXIF rotation flag.
             pil_image = ImageOps.exif_transpose(pil_image)
             if pil_image.mode in ("RGBA", "LA", "P"):
@@ -21,7 +28,7 @@ def decode_image(data: bytes) -> np.ndarray:
                 background = Image.new("RGBA", pil_image.size, (255, 255, 255, 255))
                 pil_image = Image.alpha_composite(background, pil_image)
             rgb = pil_image.convert("RGB")
-    except (UnidentifiedImageError, OSError) as exc:
+    except (UnidentifiedImageError, OSError, Image.DecompressionBombError) as exc:
         raise InvalidImageError("File is not a readable image") from exc
 
     return cv2.cvtColor(np.asarray(rgb), cv2.COLOR_RGB2BGR)

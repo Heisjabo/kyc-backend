@@ -24,6 +24,13 @@ the redirect itself.
 /etc/nginx/sites-available/pangolinkyc-api
 ------------------------------------------
 
+# Outside any server block (the top of the file, or a file in /etc/nginx/conf.d/): one
+# shared counter per client address. This is the second layer behind the limits inside
+# the service (app/core/ratelimit.py), which count in memory per process.
+# 20 requests a second sustained is far above a person's use and above the live camera
+# guidance (15 a second); bursts of up to 60 are let through.
+limit_req_zone $binary_remote_addr zone=kyc_api:10m rate=20r/s;
+
 server {
     listen 80;
     listen [::]:80;
@@ -33,6 +40,20 @@ server {
     # so without this every upload is refused with a 413 that never reaches the app
     # and leaves nothing in its log.
     client_max_body_size 12M;
+
+    # Refused with 429 rather than the default 503, so a client can tell "slow down" from
+    # "down".
+    limit_req zone=kyc_api burst=60 nodelay;
+    limit_req_status 429;
+
+    # Security headers. The service sets its own too (app/api/security_headers.py); these cover
+    # responses nginx itself writes (413, 429, 502), which never reach the service. `always`
+    # is what makes nginx add them to error responses.
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-Frame-Options "DENY" always;
+    add_header Referrer-Policy "no-referrer" always;
+    add_header Content-Security-Policy "default-src 'none'; frame-ancestors 'none'; base-uri 'none'" always;
+    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
 
     location / {
         proxy_pass http://127.0.0.1:4500;
@@ -67,6 +88,13 @@ server {
 
     # The journey uploads a document and a proof of address.
     client_max_body_size 12M;
+
+    # Browsers ignore Strict-Transport-Security sent over plain http, so this only takes
+    # effect once TLS is in front (certbot, or the CDN). The rest of the security headers
+    # (CSP, frame-ancestors, Referrer-Policy, Permissions-Policy) are set by the Next.js app
+    # itself in next.config.ts, so they are not repeated here.
+    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+    add_header X-Content-Type-Options "nosniff" always;
 
     location / {
         proxy_pass http://127.0.0.1:4501;

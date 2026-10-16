@@ -42,6 +42,10 @@
 </main>
 
 <script>
+  // A redirect is followed only if it is a plain http(s) address: never javascript: or data:.
+  function safeRedirect(url) {
+    try { const u = new URL(url); return (u.protocol === 'https:' || u.protocol === 'http:') ? u.href : null; } catch (e) { return null; }
+  }
 const token = location.pathname.split('/')[2];
 const WORDING = {
   document: ['Your document', 'A passport, national ID or driving licence'],
@@ -99,9 +103,9 @@ async function load() {
     lead.textContent = session.status === 'needs_review'
       ? 'Your checks are complete and are being reviewed. Thank you.'
       : 'All done. Thank you.';
-    if (session.redirect_url) {
+    if (safeRedirect(session.redirect_url)) {
       go.hidden = false;
-      go.href = session.redirect_url;
+      go.href = safeRedirect(session.redirect_url) || '#';
       go.textContent = 'Back to where you came from';
     }
     return;
