@@ -18,9 +18,14 @@ import ipaddress
 import socket
 from urllib.parse import urlsplit
 
+import re
+
 from app.core.config import settings
 
 MAX_URL_LENGTH = 2048
+
+_DANGEROUS_SCHEMES = {"javascript", "data", "vbscript", "file", "blob", "about"}
+_SCHEME_PATTERN = re.compile(r"^[a-zA-Z][a-zA-Z0-9+.-]*$")
 
 
 class UnsafeUrl(ValueError):
@@ -51,8 +56,44 @@ def _parts(url: str):
 
 
 def check_redirect(url: str) -> str:
-    """The redirect URL, cleaned, or UnsafeUrl."""
-    return _parts(url)[0]
+    """The redirect URL, cleaned, or UnsafeUrl.
+
+    Accepts https (and http in development) web addresses or mobile application
+    deep-link schemes (e.g. taichat://kyc-complete). Forbids dangerous schemes
+    like javascript:, data:, vbscript:, file:.
+    """
+    if not isinstance(url, str) or not url.strip():
+        raise UnsafeUrl("must not be empty")
+    url = url.strip()
+    if len(url) > MAX_URL_LENGTH:
+        raise UnsafeUrl("is too long")
+    if any(ord(c) < 32 or ord(c) == 127 for c in url) or "\\" in url:
+        raise UnsafeUrl("contains characters that are not allowed")
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        raise UnsafeUrl("is not a valid address") from None
+
+    scheme = parts.scheme.lower()
+    if not scheme or not _SCHEME_PATTERN.match(scheme) or scheme in _DANGEROUS_SCHEMES:
+        raise UnsafeUrl("uses an unsafe or invalid scheme")
+
+    if scheme in ("http", "https"):
+        allowed = {"https"} | ({"http"} if settings.ENVIRONMENT == "development" else set())
+        if scheme not in allowed:
+            raise UnsafeUrl("must start with https://")
+        if not parts.hostname:
+            raise UnsafeUrl("has no host")
+        if parts.username is not None or parts.password is not None:
+            raise UnsafeUrl("must not contain a username or password")
+    else:
+        # App deep-link (e.g. taichat://kyc-complete)
+        if not (parts.netloc or parts.path):
+            raise UnsafeUrl("has no destination")
+        if parts.username is not None or parts.password is not None:
+            raise UnsafeUrl("must not contain a username or password")
+
+    return url
 
 
 def _public(address: str) -> bool:
