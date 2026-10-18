@@ -387,6 +387,24 @@ def settle(db: Session, verification: Verification) -> Verification:
     return verification
 
 
+def document_group(verification: Verification, step: Step | None = None) -> dict | None:
+    """The document section the person ticked, as {key, label}, or None.
+
+    Read off the latest document attempt (or the step given), with its label
+    from the sections the client set, so a reader sees "I am a foreigner living
+    or working in my registered country" and not only foreign_resident.
+    """
+    if step is None:
+        attempts = [s for s in verification.steps if s.step == VerificationStep.document]
+        step = max(attempts, key=lambda s: s.attempt) if attempts else None
+    key = (step.extracted or {}).get("document_group") if step else None
+    if not key:
+        return None
+    groups = (verification.settings or {}).get("document_groups") or []
+    label = next((group.get("label") for group in groups if group.get("key") == key), None)
+    return {"key": key, "label": label}
+
+
 def notify_client(db: Session, verification: Verification) -> None:
     """Tell the client's callback where the verification stands now."""
     _fire_callback(db, verification)
@@ -413,6 +431,7 @@ def _fire_callback(db: Session, verification: Verification) -> None:
         "event": verification.event,
         "reasons": verification.reasons or [],
         "steps": steps_data,
+        "document_group": document_group(verification),
     }
 
     url = verification.callback_url

@@ -41,6 +41,7 @@ from app.schemas.due_diligence import (
     UpdateFormRequest,
 )
 from app.services import due_diligence as forms
+from app.services import verifications as service
 
 router = APIRouter(tags=["due diligence forms"])
 
@@ -300,6 +301,17 @@ def response_list(
         if applicant_ids else {}
     )
 
+    # Each verification's latest document attempt, for the section the person ticked.
+    document_steps: dict[int, Step] = {}
+    if rows:
+        for document_step in db.scalars(
+            select(Step)
+            .where(Step.step == VerificationStep.document,
+                   Step.verification_id.in_({verification.id for _, verification in rows}))
+            .order_by(Step.attempt)
+        ):
+            document_steps[document_step.verification_id] = document_step
+
     items = []
     for step, verification in rows:
         snapshot = (step.result or {}).get("form") or {}
@@ -321,6 +333,10 @@ def response_list(
                     Answer(key=field["key"], label=field["label"], type=field["type"], value=answers.get(field["key"]))
                     for field in snapshot.get("fields", [])
                 ],
+                document_group=(
+                    service.document_group(verification, document_steps[verification.id])
+                    if verification.id in document_steps else None
+                ),
                 submitted_at=step.completed_at,
             )
         )

@@ -175,6 +175,8 @@ def test_sending_is_signed_refuses_internal_hosts_and_does_not_follow_redirects(
         7, post["content"], int(post["headers"]["X-KYC-Timestamp"])
     )
     assert json.loads(post["content"])["reference"] == "abc"
+    # No document step yet, so no section ticked.
+    assert json.loads(post["content"])["document_group"] is None
 
     sent.clear()
     resolves_to(monkeypatch, "169.254.169.254")   # the address has been changed since
