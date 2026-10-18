@@ -445,5 +445,6 @@ def read_session(token: str, db: Session = Depends(get_session)) -> SessionRespo
         expires_at=verification.expires_at,
         redirect_url=urls.redirect_or_none(verification.redirect_url),
         document_types=(verification.settings or {}).get("document_types"),
+        document_groups=(verification.settings or {}).get("document_groups"),
         address_types=(verification.settings or {}).get("address_types"),
     )

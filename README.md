@@ -413,6 +413,30 @@ way Shufti's `document.supported_types` does: any of `passport`, `id_card`,
 `driving_license`. Left out, all three are offered. The session page shows only
 these, and a document of any other type is refused with 422 at the step.
 
+`document_groups` puts sections in front of the documents: the person ticks the
+one that describes them and is then offered only that section's documents. Send
+`"residency"` for the built-in three:
+
+| key | label | accepts |
+|---|---|---|
+| `citizen_passport` | I am a citizen of my registered country | `passport` |
+| `citizen_no_passport` | I don't have a passport but I am a citizen of my registered country | `driving_license`, `id_card` (shown as "National ID") |
+| `foreign_resident` | I am a foreigner living or working in my registered country | `id_card` (shown as "Resident ID") |
+
+Or send your own, up to six: `[{"key": "investor_us", "label": "I am a US
+investor", "note": "Passport required", "document_types": ["passport"],
+"labels": {}}]`. A key is lowercase letters, digits and underscores and is
+unique; `note` is shown under the label; `labels` renames a document within
+that section. Left out, the step is the plain list of `document_types` as
+before. With groups, `document_types` defaults to every type they offer, and if
+you send both, the groups may not offer a type it leaves out (422).
+
+The session page sends the chosen key as `document_group` with the document. The
+step refuses a document without one, or one that section does not accept, with
+422. The key is kept on the step as `extracted.document_group`. A resident ID is
+read as an `id_card`: the section records what the person said, it is not a
+separate document check.
+
 `address_types` does the same for the proof of address, like Shufti's
 `address.supported_types`: any of `utility_bill`, `bank_statement`,
 `credit_card_statement`, `rent_agreement`, `driving_license`. Left out, every

@@ -28,6 +28,68 @@ class ClaimedDetails(BaseModel):
     address: str | None = Field(default=None, max_length=250)
 
 
+IdentityDocument = Literal["passport", "id_card", "driving_license"]
+
+
+class DocumentGroup(BaseModel):
+    """One section on the document step: who it is for, and what it accepts.
+
+    The person ticks the section that describes them and is then offered only
+    that section's documents.
+    """
+
+    key: str = Field(min_length=1, max_length=40, pattern=r"^[a-z0-9_]+$")
+    label: str = Field(min_length=1, max_length=160)
+    # What the section asks for, shown under the label: "Passport required".
+    note: str | None = Field(default=None, max_length=160)
+    document_types: list[IdentityDocument] = Field(min_length=1)
+    # What to call a document in this section, where the plain name is wrong:
+    # an id_card is a "Resident ID" to somebody who lives in a country they are
+    # not a citizen of.
+    labels: dict[IdentityDocument, str] = Field(default_factory=dict)
+
+    @field_validator("document_types")
+    @classmethod
+    def _once_each(cls, value: list[str]) -> list[str]:
+        return list(dict.fromkeys(value))
+
+    @field_validator("labels")
+    @classmethod
+    def _short_labels(cls, value: dict[str, str]) -> dict[str, str]:
+        if any(not label.strip() or len(label) > 60 for label in value.values()):
+            raise ValueError("each label needs 1 to 60 characters")
+        return value
+
+
+# The sections a client gets by sending document_groups: "residency". Citizens
+# show a passport, or a national ID or licence when they hold no passport;
+# foreigners show the resident ID their country of residence gave them.
+DOCUMENT_GROUP_PRESETS: dict[str, list[DocumentGroup]] = {
+    "residency": [
+        DocumentGroup(
+            key="citizen_passport",
+            label="I am a citizen of my registered country",
+            note="Passport required",
+            document_types=["passport"],
+        ),
+        DocumentGroup(
+            key="citizen_no_passport",
+            label="I don't have a passport but I am a citizen of my registered country",
+            note="Driver's license or national ID required",
+            document_types=["driving_license", "id_card"],
+            labels={"id_card": "National ID"},
+        ),
+        DocumentGroup(
+            key="foreign_resident",
+            label="I am a foreigner living or working in my registered country",
+            note="Resident ID required",
+            document_types=["id_card"],
+            labels={"id_card": "Resident ID"},
+        ),
+    ],
+}
+
+
 class CreateVerificationRequest(BaseModel):
     # The client's own string for this verification, which they look statuses up
     # by afterwards. Must be unique within their account. One is generated for
@@ -47,8 +109,14 @@ class CreateVerificationRequest(BaseModel):
     form_id: str | None = Field(default=None, max_length=120)
     # The identity documents the person may choose from, as Shufti's
     # document.supported_types. Left out, every adult document is offered.
-    document_types: list[Literal["passport", "id_card", "driving_license"]] | None = Field(
+    document_types: list[IdentityDocument] | None = Field(
         default=None, description="passport, id_card, driving_license"
+    )
+    # Sections the person chooses between before choosing a document: the name
+    # of a preset ("residency"), or the client's own sections. Left out, the
+    # document step is the plain list of document_types.
+    document_groups: Literal["residency"] | list[DocumentGroup] | None = Field(
+        default=None, description='"residency", or a list of {key, label, note, document_types, labels}'
     )
     # The proofs of address the person may choose from, as Shufti's
     # address.supported_types. Left out, every proof except a driving licence.
@@ -87,6 +155,32 @@ class CreateVerificationRequest(BaseModel):
             raise ValueError("needs at least one type, or leave it out")
         # Once each, in the order sent.
         return list(dict.fromkeys(value))
+
+    @field_validator("document_groups")
+    @classmethod
+    def _document_groups(cls, value):
+        if value is None:
+            return None
+        if isinstance(value, str):
+            return [group.model_copy(deep=True) for group in DOCUMENT_GROUP_PRESETS[value]]
+        if not 1 <= len(value) <= 6:
+            raise ValueError("needs 1 to 6 groups, or leave it out")
+        keys = [group.key for group in value]
+        if len(set(keys)) != len(keys):
+            raise ValueError("each group needs its own key")
+        return value
+
+    @model_validator(mode="after")
+    def _groups_within_types(self):
+        """The groups offer documents; document_types, if sent, is the ceiling."""
+        if not self.document_groups:
+            return self
+        offered = list(dict.fromkeys(kind for group in self.document_groups for kind in group.document_types))
+        if self.document_types is None:
+            self.document_types = offered
+        elif outside := [kind for kind in offered if kind not in self.document_types]:
+            raise ValueError(f"document_groups offer {', '.join(outside)}, which document_types leaves out")
+        return self
 
     @model_validator(mode="after")
     def _one_ttl(self):
@@ -175,6 +269,8 @@ class SessionResponse(BaseModel):
     redirect_url: str | None
     # The identity documents offered on the document step; None offers all of them.
     document_types: list[str] | None = None
+    # The sections offered before the documents; None shows document_types as one list.
+    document_groups: list[DocumentGroup] | None = None
     # The proofs offered on the address step; None offers all but a driving licence.
     address_types: list[str] | None = None
 

@@ -258,6 +258,7 @@ def submit_document(
     document_type: DocumentType = Form(...),
     front: UploadFile = File(..., description="Photo page or front side"),
     back: UploadFile | None = File(None, description="Back side, where ID cards carry the MRZ"),
+    document_group: str | None = Form(None, description="The key of the section the person chose, when the client set document_groups"),
     db: Session = Depends(get_session),
 ) -> DocumentCheckResponse:
     """Read the person's document and record the step.
@@ -276,6 +277,7 @@ def submit_document(
             status.HTTP_422_UNPROCESSABLE_ENTITY,
             f"{document_type.value} is not accepted on this verification. Accepted: {', '.join(allowed)}",
         )
+    group = _chosen_group(verification, document_group, document_type)
     _attempts_left(db, verification, VerificationStep.document)
 
     front_bytes, front_type, back_bytes, back_type = _read_document(front, back, document_type)
@@ -299,6 +301,10 @@ def submit_document(
 
     extracted = result.extracted.model_dump(mode="json") if result.extracted else {}
     extracted["document_type"] = document_type.value
+    if group:
+        # What the person said about themselves: a citizen with a passport, a
+        # foreigner with a resident ID. Kept with what the document proved.
+        extracted["document_group"] = group["key"]
 
     _keep_file(db, verification, step, FileKind.document_front, front_bytes, front_type)
     if back_bytes:
@@ -333,7 +339,7 @@ def submit_document(
             warnings=warnings,
             checks=[check.model_dump(mode="json") for check in result.checks],
             processing_ms=int((time.perf_counter() - started) * 1000),
-            **{key: value for key, value in extracted.items() if key not in ("source", "document_type")},
+            **{key: value for key, value in extracted.items() if key not in ("source", "document_type", "document_group")},
             source=extracted.get("source"),
         )
     )
@@ -417,6 +423,30 @@ def _crop_around(image, box):
     x1, y1, x2, y2 = (int(value) for value in box[:4])
     pad_x, pad_y = (x2 - x1) // 3, (y2 - y1) // 3
     return image[max(0, y1 - pad_y): y2 + pad_y, max(0, x1 - pad_x): x2 + pad_x]
+
+
+def _chosen_group(verification: Verification, key: str | None, document_type: DocumentType) -> dict | None:
+    """The section the person ticked, when the client gave them sections.
+
+    Without sections there is nothing to choose and the key is ignored. With
+    them, the person has to have chosen one, and the document has to be one that
+    section accepts: a passport sent under "I don't have a passport" is refused.
+    """
+    groups = (verification.settings or {}).get("document_groups")
+    if not groups:
+        return None
+    group = next((group for group in groups if group["key"] == key), None)
+    if group is None:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            f"Choose one of: {', '.join(group['key'] for group in groups)}",
+        )
+    if document_type.value not in group["document_types"]:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            f"{document_type.value} is not accepted for {group['key']}. Accepted: {', '.join(group['document_types'])}",
+        )
+    return group
 
 
 def _fill_applicant(db: Session, verification: Verification, extracted: dict) -> None:

@@ -200,7 +200,56 @@ def test_the_session_view_carries_nothing_about_the_client(client, api_key):
     session = client.get(f"/v1/sessions/{token_of(body)}").json()
     assert set(session) == {"reference", "status", "services", "next_step",
                             "completed_steps", "expired", "expires_at", "redirect_url", "document_types",
-                            "address_types"}
+                            "document_groups", "address_types"}
+
+
+def test_without_groups_the_document_step_is_one_list(client, api_key):
+    body = open_verification(client, api_key)
+    session = client.get(f"/v1/sessions/{token_of(body)}").json()
+    assert session["document_groups"] is None and session["document_types"] is None
+
+
+def test_the_residency_preset_offers_three_sections(client, api_key):
+    body = open_verification(client, api_key, document_groups="residency")
+    session = client.get(f"/v1/sessions/{token_of(body)}").json()
+    groups = {group["key"]: group for group in session["document_groups"]}
+    assert list(groups) == ["citizen_passport", "citizen_no_passport", "foreign_resident"]
+    assert groups["citizen_passport"]["document_types"] == ["passport"]
+    assert groups["citizen_no_passport"]["document_types"] == ["driving_license", "id_card"]
+    assert groups["foreign_resident"]["document_types"] == ["id_card"]
+    assert groups["foreign_resident"]["labels"] == {"id_card": "Resident ID"}
+    # The groups set what the step accepts when document_types is left out.
+    assert session["document_types"] == ["passport", "driving_license", "id_card"]
+
+
+def test_a_client_can_send_its_own_sections(client, api_key):
+    body = open_verification(client, api_key, document_groups=[
+        {"key": "investor_us", "label": "I am a US investor", "note": "Passport required",
+         "document_types": ["passport"]},
+        {"key": "everyone_else", "label": "Everyone else", "document_types": ["id_card", "driving_license"]},
+    ])
+    session = client.get(f"/v1/sessions/{token_of(body)}").json()
+    assert [group["key"] for group in session["document_groups"]] == ["investor_us", "everyone_else"]
+
+
+@pytest.mark.parametrize("groups", [
+    "no_such_preset",
+    [],
+    [{"key": "same", "label": "One", "document_types": ["passport"]},
+     {"key": "same", "label": "Two", "document_types": ["id_card"]}],
+    [{"key": "empty", "label": "Nothing", "document_types": []}],
+    [{"key": "Not A Key", "label": "Bad key", "document_types": ["passport"]}],
+])
+def test_groups_that_make_no_sense_are_refused(client, api_key, groups):
+    response = client.post("/v1/verifications", headers=api_key,
+                           json={"services": ["document"], "document_groups": groups})
+    assert response.status_code == 422
+
+
+def test_groups_cannot_offer_what_document_types_leaves_out(client, api_key):
+    response = client.post("/v1/verifications", headers=api_key, json={
+        "services": ["document"], "document_types": ["id_card"], "document_groups": "residency"})
+    assert response.status_code == 422
 
 
 def test_an_unknown_link_is_not_found(client):
@@ -229,6 +278,40 @@ def test_the_document_step_is_recorded_with_its_files(client, api_key, db_sessio
     kinds = {f.kind for f in db_session.scalars(
         select(VerificationFile).where(VerificationFile.verification_id == verification.id))}
     assert kinds == {FileKind.document_front, FileKind.document_back}
+
+
+def test_with_groups_the_person_has_to_choose_one(client, api_key, monkeypatch):
+    stub_document(monkeypatch)
+    body = open_verification(client, api_key, document_groups="residency")
+    response = client.post(f"/v1/sessions/{token_of(body)}/document", data={"document_type": "id_card"},
+                           files={"front": ("front.jpg", image_bytes(), "image/jpeg")})
+    assert response.status_code == 422
+
+
+def test_a_document_outside_the_chosen_group_is_refused(client, api_key, monkeypatch):
+    stub_document(monkeypatch)
+    body = open_verification(client, api_key, document_groups="residency")
+    response = client.post(
+        f"/v1/sessions/{token_of(body)}/document",
+        data={"document_type": "passport", "document_group": "citizen_no_passport"},
+        files={"front": ("front.jpg", image_bytes(), "image/jpeg")},
+    )
+    assert response.status_code == 422
+
+
+def test_the_chosen_group_is_kept_with_the_document(client, api_key, db_session, monkeypatch):
+    stub_document(monkeypatch)
+    body = open_verification(client, api_key, document_groups="residency")
+    response = client.post(
+        f"/v1/sessions/{token_of(body)}/document",
+        data={"document_type": "id_card", "document_group": "foreign_resident"},
+        files={"front": ("front.jpg", image_bytes(), "image/jpeg")},
+    )
+    assert response.status_code == 200
+    verification = db_session.scalar(select(Verification).where(Verification.reference == body["reference"]))
+    step = db_session.scalar(select(Step).where(Step.verification_id == verification.id,
+                                                Step.step == "document"))
+    assert step.extracted["document_group"] == "foreign_resident"
 
 
 def test_what_the_document_proves_moves_onto_the_person(client, api_key, db_session, monkeypatch):
