@@ -1,644 +1,664 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>KYC test: face</title>
-<link rel="stylesheet" href="/static/style.css">
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>KYC test: face</title>
+  <link rel="stylesheet" href="/static/style.css">
 </head>
+
 <body>
-<main>
-  <h1>Face check</h1>
-  <p class="lead" id="lead">Your camera is checked first for lighting and sharpness. Then follow the prompts: the circle only fills once the camera sees you move.</p>
+  <main>
+    <h1>Face check</h1>
+    <p class="lead" id="lead">Your camera is checked first for lighting and sharpness. Then follow the prompts: the
+      circle only fills once the camera sees you move.</p>
 
-  <!-- Stage 1: camera, then the frozen shot while the answer loads -->
-  <section id="stage-capture">
-    <div class="stage">
-      <div>
-        <div class="camera" id="camera">
-          <video id="video" autoplay playsinline muted></video>
-          <canvas id="freeze" hidden></canvas>
-          <svg class="ring" viewBox="0 0 100 100">
-            <circle class="ring-track" cx="50" cy="50" r="47"></circle>
-            <circle id="ring-progress" class="ring-progress" cx="50" cy="50" r="47"></circle>
-          </svg>
-          <div id="spinner" class="spinner" hidden></div>
-          <div id="prompt" class="prompt">Press start</div>
+    <!-- Stage 1: camera, then the frozen shot while the answer loads -->
+    <section id="stage-capture">
+      <div class="stage">
+        <div>
+          <div class="camera" id="camera">
+            <video id="video" autoplay playsinline muted></video>
+            <canvas id="freeze" hidden></canvas>
+            <svg class="ring" viewBox="0 0 100 100">
+              <circle class="ring-track" cx="50" cy="50" r="47"></circle>
+              <circle id="ring-progress" class="ring-progress" cx="50" cy="50" r="47"></circle>
+            </svg>
+            <div id="spinner" class="spinner" hidden></div>
+            <div id="prompt" class="prompt">Press start</div>
+          </div>
+
+          <div id="hint" class="hint"></div>
+          <div id="readings" class="readings"></div>
+
+          <div class="controls">
+            <button id="start">Start</button>
+          </div>
         </div>
 
-        <div id="hint" class="hint"></div>
-        <div id="readings" class="readings"></div>
+        <aside>
+          <h2>Scanned image</h2>
+          <img id="document-face" alt="" hidden>
+          <dl id="document-fields"></dl>
+        </aside>
+      </div>
+    </section>
 
-        <div class="controls">
-          <button id="start">Start</button>
+    <!-- Stage 2: the result, in the place the camera was -->
+    <section id="stage-result" hidden>
+      <div id="verdict" class="verdict"></div>
+
+      <div class="stage">
+        <div class="photos">
+          <figure><img id="captured" alt="">
+            <figcaption>Photo taken just now</figcaption>
+          </figure>
+          <figure><img id="document-face-2" alt="" hidden>
+            <figcaption>Photo on your document</figcaption>
+          </figure>
         </div>
+        <aside>
+          <h2>What we measured</h2>
+          <dl id="scores"></dl>
+        </aside>
       </div>
 
-      <aside>
-        <h2>Scanned image</h2>
-        <img id="document-face" alt="" hidden>
-        <dl id="document-fields"></dl>
-      </aside>
-    </div>
-  </section>
-
-  <!-- Stage 2: the result, in the place the camera was -->
-  <section id="stage-result" hidden>
-    <div id="verdict" class="verdict"></div>
-
-    <div class="stage">
-      <div class="photos">
-        <figure><img id="captured" alt=""><figcaption>Photo taken just now</figcaption></figure>
-        <figure><img id="document-face-2" alt="" hidden><figcaption>Photo on your document</figcaption></figure>
+      <div id="redirect-section"
+        style="margin: 1.5rem 0; padding: 1.25rem; background: rgba(37, 99, 235, 0.15); border: 1px solid #3b82f6; border-radius: 10px; text-align: center;"
+        hidden>
+        <p style="margin: 0 0 0.5rem 0; font-weight: bold; color: #60a5fa; font-size: 1.1rem;">Verification Complete!
+        </p>
+        <p style="margin: 0 0 1rem 0; font-size: 0.9rem; color: #cbd5e1;">Redirecting back to application in 2
+          seconds...</p>
+        <a id="redirect-btn"
+          style="display: inline-block; padding: 0.6rem 1.4rem; background: #2563eb; color: white; text-decoration: none; border-radius: 6px; font-weight: bold;"
+          href="#">Return to Application</a>
       </div>
-      <aside>
-        <h2>What we measured</h2>
-        <dl id="scores"></dl>
-      </aside>
-    </div>
 
-    <div id="redirect-section" style="margin: 1.5rem 0; padding: 1.25rem; background: rgba(37, 99, 235, 0.15); border: 1px solid #3b82f6; border-radius: 10px; text-align: center;" hidden>
-      <p style="margin: 0 0 0.5rem 0; font-weight: bold; color: #60a5fa; font-size: 1.1rem;">Verification Complete!</p>
-      <p style="margin: 0 0 1rem 0; font-size: 0.9rem; color: #cbd5e1;">Redirecting back to application in 2 seconds...</p>
-      <a id="redirect-btn" style="display: inline-block; padding: 0.6rem 1.4rem; background: #2563eb; color: white; text-decoration: none; border-radius: 6px; font-weight: bold;" href="#">Return to Application</a>
-    </div>
+      <button id="again">Try again</button>
+      <details>
+        <summary>Head pose per frame</summary>
+        <pre id="poses"></pre>
+      </details>
+      <details>
+        <summary>Full response</summary>
+        <pre id="json"></pre>
+      </details>
+    </section>
 
-    <button id="again">Try again</button>
-    <details><summary>Head pose per frame</summary><pre id="poses"></pre></details>
-    <details><summary>Full response</summary><pre id="json"></pre></details>
-  </section>
+    <div id="status" class="status"></div>
+  </main>
 
-  <div id="status" class="status"></div>
-</main>
+  <script>
+    // A redirect is followed only if it is a plain http(s) address: never javascript: or data:.
+    function safeRedirect(url) {
+      try { const u = new URL(url); return (u.protocol === 'https:' || u.protocol === 'http:') ? u.href : null; } catch (e) { return null; }
+    }
+    let verificationId = location.pathname.split('/').pop();
+    // Part of a verification session: results go to that session instead of a
+    // document scanned on this machine a moment ago.
+    // The token is in the path: /verify/{token}/...
+    const SESSION_TOKEN = (location.pathname.match(/^\/verify\/([^/]+)/) || [])[1] || null;
+    // In a session the path ends in /face, so the id has to come from the token,
+    // not from the last segment. Everything the live guidance does is keyed on it.
+    if (SESSION_TOKEN) verificationId = SESSION_TOKEN;
+    const video = document.getElementById('video');
+    const freeze = document.getElementById('freeze');
+    const camera = document.getElementById('camera');
+    const prompt = document.getElementById('prompt');
+    const hint = document.getElementById('hint');
+    const readings = document.getElementById('readings');
+    const spinner = document.getElementById('spinner');
+    const status = document.getElementById('status');
+    const ring = document.getElementById('ring-progress');
+    const stageCapture = document.getElementById('stage-capture');
+    const stageResult = document.getElementById('stage-result');
+    const RING = 2 * Math.PI * 47;
+    ring.style.strokeDasharray = RING;
+    ring.style.strokeDashoffset = RING;
 
-<script>
-  // A redirect is followed only if it is a plain http(s) address: never javascript: or data:.
-  function safeRedirect(url) {
-    try { const u = new URL(url); return (u.protocol === 'https:' || u.protocol === 'http:') ? u.href : null; } catch (e) { return null; }
-  }
-let verificationId = location.pathname.split('/').pop();
-// Part of a verification session: results go to that session instead of a
-// document scanned on this machine a moment ago.
-// The token is in the path: /verify/{token}/...
-const SESSION_TOKEN = (location.pathname.match(/^\/verify\/([^/]+)/) || [])[1] || null;
-// In a session the path ends in /face, so the id has to come from the token,
-// not from the last segment. Everything the live guidance does is keyed on it.
-if (SESSION_TOKEN) verificationId = SESSION_TOKEN;
-const video = document.getElementById('video');
-const freeze = document.getElementById('freeze');
-const camera = document.getElementById('camera');
-const prompt = document.getElementById('prompt');
-const hint = document.getElementById('hint');
-const readings = document.getElementById('readings');
-const spinner = document.getElementById('spinner');
-const status = document.getElementById('status');
-const ring = document.getElementById('ring-progress');
-const stageCapture = document.getElementById('stage-capture');
-const stageResult = document.getElementById('stage-result');
-const RING = 2 * Math.PI * 47;
-ring.style.strokeDasharray = RING;
-ring.style.strokeDashoffset = RING;
+    const STEPS = {
+      full: ['up', 'down', 'left', 'right'],
+      turns: ['left', 'right'],
+    };
+    const INSTRUCTION = {
+      up: 'Tilt your head up',
+      down: 'Tilt your head down',
+      // Measured from real captures: negative yaw is the person turning to their own
+      // left. The preview is mirrored like a mirror, so the prompt names their side,
+      // not the screen's.
+      left: 'Slowly turn your head to your left',
+      right: 'Slowly turn your head to your right',
+      centre: 'Look straight at the camera',
+    };
+    // What the server reports about the frame, in words the person can act on.
+    const HINTS = {
+      NO_FACE: 'Position your face inside the circle',
+      MULTIPLE_FACES: 'Make sure you are the only person in view',
+      MOVE_CLOSER: 'Move closer to the camera',
+      MOVE_BACK: 'Move slightly further from the camera',
+      OFF_CENTRE: 'Centre your face in the circle',
+      TOO_DARK: 'Move to a brighter area or turn on a light',
+      TOO_BRIGHT: 'Too much light: move away from the window or lamp behind you',
+      UNEVEN_LIGHTING: 'Light is coming from one side: face the light source',
+      HOLD_STILL: 'Hold your device steady',
+      FRAME_UNREADABLE: 'The camera image could not be read',
+    };
+    const WORDING = { pass: 'Verified', review: 'Needs a closer look', fail: 'Not verified', retake: 'Please try again' };
 
-const STEPS = {
-  full: ['up', 'down', 'left', 'right'],
-  turns: ['left', 'right'],
-};
-const INSTRUCTION = {
-  up: 'Tilt your head up',
-  down: 'Tilt your head down',
-  // Measured from real captures: negative yaw is the person turning to their own
-  // left. The preview is mirrored like a mirror, so the prompt names their side,
-  // not the screen's.
-  left: 'Slowly turn your head to your left',
-  right: 'Slowly turn your head to your right',
-  centre: 'Look straight at the camera',
-};
-// What the server reports about the frame, in words the person can act on.
-const HINTS = {
-  NO_FACE: 'Position your face inside the circle',
-  MULTIPLE_FACES: 'Make sure you are the only person in view',
-  MOVE_CLOSER: 'Move closer to the camera',
-  MOVE_BACK: 'Move slightly further from the camera',
-  OFF_CENTRE: 'Centre your face in the circle',
-  TOO_DARK: 'Move to a brighter area or turn on a light',
-  TOO_BRIGHT: 'Too much light: move away from the window or lamp behind you',
-  UNEVEN_LIGHTING: 'Light is coming from one side: face the light source',
-  HOLD_STILL: 'Hold your device steady',
-  FRAME_UNREADABLE: 'The camera image could not be read',
-};
-const WORDING = { pass: 'Verified', review: 'Needs a closer look', fail: 'Not verified', retake: 'Please try again' };
+    const TURN_TARGET = 18;   // degrees, matches TURN_DEGREES on the server
+    const NOD_TARGET = 12;    // matches NOD_DEGREES
+    const READY_FRAMES = 3;         // consecutive good frames before capture begins
+    const PORTRAIT_HOLD_FRAMES = 2; // frames square to the camera before the shutter
+    const PORTRAIT_MAX_DEGREES = 8; // how far off straight-on the head may be for the portrait
+    const PORTRAIT_ATTEMPTS = 6;
+    const READY_TIMEOUT_MS = 12000; // then start anyway: guidance must never trap anyone
+    const CALIBRATION_FRAMES = 4;
+    const STEP_TIMEOUT_MS = 25000;
+    const PROBE_GAP_MS = 0;     // sample as fast as the round trip allows
 
-const TURN_TARGET = 18;   // degrees, matches TURN_DEGREES on the server
-const NOD_TARGET = 12;    // matches NOD_DEGREES
-const READY_FRAMES = 3;         // consecutive good frames before capture begins
-const PORTRAIT_HOLD_FRAMES = 2; // frames square to the camera before the shutter
-const PORTRAIT_MAX_DEGREES = 8; // how far off straight-on the head may be for the portrait
-const PORTRAIT_ATTEMPTS = 6;
-const READY_TIMEOUT_MS = 12000; // then start anyway: guidance must never trap anyone
-const CALIBRATION_FRAMES = 4;
-const STEP_TIMEOUT_MS = 25000;
-const PROBE_GAP_MS = 0;     // sample as fast as the round trip allows
+    let baseline = null;
+    let kept = [];
+    let portraitBlob = null;      // the one still identity is decided on
+    let recorder = null, clipChunks = [], clipBlob = null;
+    let documentType = null;      // a birth certificate means a child's check
+    let claimed = [];   // {index, step}: which frame the guidance accepted for which step
+    let cancelled = false;
+    let sessionRedirectUrl = null;
 
-let baseline = null;
-let kept = [];
-let portraitBlob = null;      // the one still identity is decided on
-let recorder = null, clipChunks = [], clipBlob = null;
-let documentType = null;      // a birth certificate means a child's check
-let claimed = [];   // {index, step}: which frame the guidance accepted for which step
-let cancelled = false;
-let sessionRedirectUrl = null;
+    async function loadSession() {
+      if (SESSION_TOKEN) {
+        try {
+          const sessRes = await fetch(`/v1/sessions/${SESSION_TOKEN}`);
+          if (sessRes.ok) {
+            const sessData = await sessRes.json();
+            if (safeRedirect(sessData.redirect_url)) sessionRedirectUrl = safeRedirect(sessData.redirect_url);
+          }
+        } catch (e) { }
 
-async function loadSession() {
-  if (SESSION_TOKEN) {
-    try {
-      const sessRes = await fetch(`/v1/sessions/${SESSION_TOKEN}`);
-      if (sessRes.ok) {
-        const sessData = await sessRes.json();
-        if (safeRedirect(sessData.redirect_url)) sessionRedirectUrl = safeRedirect(sessData.redirect_url);
+        // The document was read moments ago in this same session, so show the face
+        // we cut from it rather than an empty panel.
+        const portrait = document.getElementById('document-face');
+        const response = await fetch(`/v1/sessions/${SESSION_TOKEN}/document-portrait`);
+        if (response.ok) {
+          const url = URL.createObjectURL(await response.blob());
+          portrait.src = url;
+          portrait.hidden = false;
+          const second = document.getElementById('document-face-2');
+          second.src = url;
+          second.hidden = false;
+        } else {
+          document.querySelector('aside h2').textContent = 'Scanned image';
+          document.getElementById('document-fields').innerHTML =
+            '<dt>photo</dt><dd>none could be read from it</dd>';
+        }
+        return;
       }
-    } catch (e) {}
-
-    // The document was read moments ago in this same session, so show the face
-    // we cut from it rather than an empty panel.
-    const portrait = document.getElementById('document-face');
-    const response = await fetch(`/v1/sessions/${SESSION_TOKEN}/document-portrait`);
-    if (response.ok) {
-      const url = URL.createObjectURL(await response.blob());
-      portrait.src = url;
-      portrait.hidden = false;
-      const second = document.getElementById('document-face-2');
-      second.src = url;
-      second.hidden = false;
-    } else {
-      document.querySelector('aside h2').textContent = 'Scanned image';
-      document.getElementById('document-fields').innerHTML =
-        '<dt>photo</dt><dd>none could be read from it</dd>';
+      const response = await fetch(`/api/session/${verificationId}`);
+      if (!response.ok) {
+        status.textContent = 'This verification has expired. Scan a document again.';
+        document.getElementById('start').disabled = true;
+        return;
+      }
+      const session = await response.json();
+      if (session.document_face) {
+        for (const id of ['document-face', 'document-face-2']) {
+          const image = document.getElementById(id);
+          image.src = 'data:image/jpeg;base64,' + session.document_face;
+          image.hidden = false;
+        }
+      }
+      const fields = document.getElementById('document-fields');
+      documentType = session.document_type;
+      const shown = { document_type: session.document_type, decision: session.document_decision, ...session.fields };
+      for (const [key, value] of Object.entries(shown)) {
+        if (value === null || value === undefined || value === '') continue;
+        fields.insertAdjacentHTML('beforeend', `<dt>${key.replaceAll('_', ' ')}</dt><dd>${value}</dd>`);
+      }
     }
-    return;
-  }
-  const response = await fetch(`/api/session/${verificationId}`);
-  if (!response.ok) {
-    status.textContent = 'This verification has expired. Scan a document again.';
-    document.getElementById('start').disabled = true;
-    return;
-  }
-  const session = await response.json();
-  if (session.document_face) {
-    for (const id of ['document-face', 'document-face-2']) {
-      const image = document.getElementById(id);
-      image.src = 'data:image/jpeg;base64,' + session.document_face;
-      image.hidden = false;
+
+    async function startCamera() {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 1280 } },
+        audio: false,
+      });
+      video.srcObject = stream;
+      await video.play();
     }
-  }
-  const fields = document.getElementById('document-fields');
-  documentType = session.document_type;
-  const shown = { document_type: session.document_type, decision: session.document_decision, ...session.fields };
-  for (const [key, value] of Object.entries(shown)) {
-    if (value === null || value === undefined || value === '') continue;
-    fields.insertAdjacentHTML('beforeend', `<dt>${key.replaceAll('_', ' ')}</dt><dd>${value}</dd>`);
-  }
-}
 
-async function startCamera() {
-  const stream = await navigator.mediaDevices.getUserMedia({
-    video: { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 1280 } },
-    audio: false,
-  });
-  video.srcObject = stream;
-  await video.play();
-}
+    function drawSquare(canvas) {
+      const size = Math.min(video.videoWidth, video.videoHeight);
+      canvas.width = 720;   // detail matters for the face match; grain costs score
+      canvas.height = 720;
+      canvas.getContext('2d').drawImage(
+        video,
+        (video.videoWidth - size) / 2, (video.videoHeight - size) / 2, size, size,
+        0, 0, canvas.width, canvas.height,
+      );
+    }
 
-function drawSquare(canvas) {
-  const size = Math.min(video.videoWidth, video.videoHeight);
-  canvas.width = 720;   // detail matters for the face match; grain costs score
-  canvas.height = 720;
-  canvas.getContext('2d').drawImage(
-    video,
-    (video.videoWidth - size) / 2, (video.videoHeight - size) / 2, size, size,
-    0, 0, canvas.width, canvas.height,
-  );
-}
+    function grabFrame() {
+      const canvas = document.createElement('canvas');
+      drawSquare(canvas);
+      return new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.95));
+    }
 
-function grabFrame() {
-  const canvas = document.createElement('canvas');
-  drawSquare(canvas);
-  return new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.95));
-}
+    const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+    /** The sound a camera makes. Generated rather than loaded: a shutter is two
+     *  short clicks, and shipping an audio file for that is not worth it. */
+    function shutterSound() {
+      try {
+        const context = new (window.AudioContext || window.webkitAudioContext)();
+        const click = (at, frequency) => {
+          const oscillator = context.createOscillator(), gain = context.createGain();
+          oscillator.type = 'square';
+          oscillator.frequency.value = frequency;
+          gain.gain.setValueAtTime(0.0001, context.currentTime + at);
+          gain.gain.exponentialRampToValueAtTime(0.25, context.currentTime + at + 0.005);
+          gain.gain.exponentialRampToValueAtTime(0.0001, context.currentTime + at + 0.05);
+          oscillator.connect(gain).connect(context.destination);
+          oscillator.start(context.currentTime + at);
+          oscillator.stop(context.currentTime + at + 0.06);
+        };
+        click(0, 2200);
+        click(0.07, 1400);
+        setTimeout(() => context.close(), 400);
+      } catch (error) { /* a silent shutter is not worth failing a check over */ }
+    }
 
-/** The sound a camera makes. Generated rather than loaded: a shutter is two
- *  short clicks, and shipping an audio file for that is not worth it. */
-function shutterSound() {
-  try {
-    const context = new (window.AudioContext || window.webkitAudioContext)();
-    const click = (at, frequency) => {
-      const oscillator = context.createOscillator(), gain = context.createGain();
-      oscillator.type = 'square';
-      oscillator.frequency.value = frequency;
-      gain.gain.setValueAtTime(0.0001, context.currentTime + at);
-      gain.gain.exponentialRampToValueAtTime(0.25, context.currentTime + at + 0.005);
-      gain.gain.exponentialRampToValueAtTime(0.0001, context.currentTime + at + 0.05);
-      oscillator.connect(gain).connect(context.destination);
-      oscillator.start(context.currentTime + at);
-      oscillator.stop(context.currentTime + at + 0.06);
-    };
-    click(0, 2200);
-    click(0.07, 1400);
-    setTimeout(() => context.close(), 400);
-  } catch (error) { /* a silent shutter is not worth failing a check over */ }
-}
+    /** Light the face for the shot: the phone's torch where the camera has one,
+     *  a white screen everywhere else, which is what a laptop can offer. */
+    async function flash() {
+      const track = video.srcObject && video.srcObject.getVideoTracks()[0];
+      const capabilities = track && track.getCapabilities ? track.getCapabilities() : {};
+      if (capabilities.torch) {
+        try {
+          await track.applyConstraints({ advanced: [{ torch: true }] });
+          await wait(250);
+          await track.applyConstraints({ advanced: [{ torch: false }] });
+          return;
+        } catch (error) { /* fall through to the screen flash */ }
+      }
+      const sheet = document.createElement('div');
+      sheet.style.cssText = 'position:fixed;inset:0;background:#fff;opacity:.85;z-index:9999;transition:opacity .25s';
+      document.body.appendChild(sheet);
+      await wait(120);
+      sheet.style.opacity = '0';
+      setTimeout(() => sheet.remove(), 300);
+    }
 
-/** Light the face for the shot: the phone's torch where the camera has one,
- *  a white screen everywhere else, which is what a laptop can offer. */
-async function flash() {
-  const track = video.srcObject && video.srcObject.getVideoTracks()[0];
-  const capabilities = track && track.getCapabilities ? track.getCapabilities() : {};
-  if (capabilities.torch) {
-    try {
-      await track.applyConstraints({ advanced: [{ torch: true }] });
-      await wait(250);
-      await track.applyConstraints({ advanced: [{ torch: false }] });
-      return;
-    } catch (error) { /* fall through to the screen flash */ }
-  }
-  const sheet = document.createElement('div');
-  sheet.style.cssText = 'position:fixed;inset:0;background:#fff;opacity:.85;z-index:9999;transition:opacity .25s';
-  document.body.appendChild(sheet);
-  await wait(120);
-  sheet.style.opacity = '0';
-  setTimeout(() => sheet.remove(), 300);
-}
+    /** Take the portrait: the single photograph the match is made on. */
+    async function takePortrait() {
+      shutterSound();
+      await flash();
+      portraitBlob = await grabFrame();
+      return portraitBlob;
+    }
 
-/** Take the portrait: the single photograph the match is made on. */
-async function takePortrait() {
-  shutterSound();
-  await flash();
-  portraitBlob = await grabFrame();
-  return portraitBlob;
-}
+    /** Record CLIP_SECONDS of the check, and only that, so a disputed result can be
+     *  looked at by a person later.
+     *
+     *  Three seconds is enough to show a live person moving. The whole challenge is
+     *  not: that would be a recording of somebody's face in their own home, kept for
+     *  no reason anybody could point at. The recorder stops itself, so the length
+     *  does not depend on how long the person takes over the movements. */
+    const CLIP_SECONDS = 3;
+    let clipTimer = null;
 
-/** Record CLIP_SECONDS of the check, and only that, so a disputed result can be
- *  looked at by a person later.
- *
- *  Three seconds is enough to show a live person moving. The whole challenge is
- *  not: that would be a recording of somebody's face in their own home, kept for
- *  no reason anybody could point at. The recorder stops itself, so the length
- *  does not depend on how long the person takes over the movements. */
-const CLIP_SECONDS = 3;
-let clipTimer = null;
+    function startRecording() {
+      clipChunks = [];
+      clipBlob = null;
+      clearTimeout(clipTimer);
+      if (!window.MediaRecorder || !video.srcObject) return;
+      const types = ['video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm', 'video/mp4'];
+      const type = types.find((candidate) => MediaRecorder.isTypeSupported(candidate));
+      if (!type) return;
+      try {
+        recorder = new MediaRecorder(video.srcObject, { mimeType: type, videoBitsPerSecond: 800000 });
+        recorder.ondataavailable = (event) => { if (event.data.size) clipChunks.push(event.data); };
+        recorder.onstop = () => {
+          // One blob, whether the timer stopped it or the check finished first. The
+          // first chunk carries the WebM header, so the clip is only playable when
+          // the chunks are kept from the start, which is why this records the first
+          // three seconds rather than the last three.
+          clipBlob = new Blob(clipChunks, { type: recorder.mimeType.split(';')[0] });
+        };
+        recorder.start(1000);
+        clipTimer = setTimeout(() => {
+          if (recorder && recorder.state === 'recording') recorder.stop();
+        }, CLIP_SECONDS * 1000);
+      } catch (error) { recorder = null; }
+    }
 
-function startRecording() {
-  clipChunks = [];
-  clipBlob = null;
-  clearTimeout(clipTimer);
-  if (!window.MediaRecorder || !video.srcObject) return;
-  const types = ['video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm', 'video/mp4'];
-  const type = types.find((candidate) => MediaRecorder.isTypeSupported(candidate));
-  if (!type) return;
-  try {
-    recorder = new MediaRecorder(video.srcObject, { mimeType: type, videoBitsPerSecond: 800000 });
-    recorder.ondataavailable = (event) => { if (event.data.size) clipChunks.push(event.data); };
-    recorder.onstop = () => {
-      // One blob, whether the timer stopped it or the check finished first. The
-      // first chunk carries the WebM header, so the clip is only playable when
-      // the chunks are kept from the start, which is why this records the first
-      // three seconds rather than the last three.
-      clipBlob = new Blob(clipChunks, { type: recorder.mimeType.split(';')[0] });
-    };
-    recorder.start(1000);
-    clipTimer = setTimeout(() => {
-      if (recorder && recorder.state === 'recording') recorder.stop();
-    }, CLIP_SECONDS * 1000);
-  } catch (error) { recorder = null; }
-}
+    function stopRecording() {
+      clearTimeout(clipTimer);
+      return new Promise((resolve) => {
+        if (!recorder) return resolve(null);
+        // Already stopped by the timer: the three seconds are in hand.
+        if (recorder.state === 'inactive') return resolve(clipBlob);
+        // The check finished inside three seconds, so the clip is shorter than that.
+        const previous = recorder.onstop;
+        recorder.onstop = () => {
+          previous();
+          resolve(clipBlob);
+        };
+        recorder.stop();
+      });
+    }
 
-function stopRecording() {
-  clearTimeout(clipTimer);
-  return new Promise((resolve) => {
-    if (!recorder) return resolve(null);
-    // Already stopped by the timer: the three seconds are in hand.
-    if (recorder.state === 'inactive') return resolve(clipBlob);
-    // The check finished inside three seconds, so the clip is shorter than that.
-    const previous = recorder.onstop;
-    recorder.onstop = () => {
-      previous();
-      resolve(clipBlob);
-    };
-    recorder.stop();
-  });
-}
+    /** Send one frame for live feedback: is it usable, and which way is the head pointing? */
+    async function probe(blob, calibrate = false) {
+      const data = new FormData();
+      data.append('frame', blob, 'frame.jpg');
+      data.append('verification_id', verificationId);
+      if (calibrate) data.append('calibrate', 'true');
+      const response = await fetch('/v1/face/frame', { method: 'POST', body: data });
+      return response.json();
+    }
 
-/** Send one frame for live feedback: is it usable, and which way is the head pointing? */
-async function probe(blob, calibrate = false) {
-  const data = new FormData();
-  data.append('frame', blob, 'frame.jpg');
-  data.append('verification_id', verificationId);
-  if (calibrate) data.append('calibrate', 'true');
-  const response = await fetch('/v1/face/frame', { method: 'POST', body: data });
-  return response.json();
-}
+    function showReadings(r) {
+      const bits = [];
+      if (r.face_ratio != null) bits.push(`face ${Math.round(r.face_ratio * 100)}%`);
+      if (r.brightness != null) bits.push(`light ${Math.round(r.brightness)}`);
+      if (r.blur_score != null) bits.push(`sharp ${Math.round(r.blur_score)}`);
+      if (r.uniformity != null) bits.push(`even ${r.uniformity}`);
+      if (r.yaw != null) bits.push(`yaw ${Math.round(r.yaw)}\u00b0`);
+      if (r.pitch != null) bits.push(`pitch ${Math.round(r.pitch)}\u00b0`);
+      readings.textContent = bits.join(' \u00b7 ');
+    }
 
-function showReadings(r) {
-  const bits = [];
-  if (r.face_ratio != null) bits.push(`face ${Math.round(r.face_ratio * 100)}%`);
-  if (r.brightness != null) bits.push(`light ${Math.round(r.brightness)}`);
-  if (r.blur_score != null) bits.push(`sharp ${Math.round(r.blur_score)}`);
-  if (r.uniformity != null) bits.push(`even ${r.uniformity}`);
-  if (r.yaw != null) bits.push(`yaw ${Math.round(r.yaw)}\u00b0`);
-  if (r.pitch != null) bits.push(`pitch ${Math.round(r.pitch)}\u00b0`);
-  readings.textContent = bits.join(' \u00b7 ');
-}
+    function showHint(probeResult, target) {
+      const problem = (probeResult.hints || [])[0];
+      let message = problem ? (HINTS[problem] || problem) : '';
 
-function showHint(probeResult, target) {
-  const problem = (probeResult.hints || [])[0];
-  let message = problem ? (HINTS[problem] || problem) : '';
+      // Show how far the head has actually turned, so the movement is visible while
+      // it is happening rather than the circle just sitting there.
+      if (!message && baseline && probeResult.yaw !== null && probeResult.yaw !== undefined) {
+        const turned = Math.round(probeResult.yaw - baseline.yaw);
+        const nodding = target === 'up' || target === 'down';
+        const moved = nodding ? Math.round(probeResult.pitch ?? 0) : turned;
+        const needed = nodding ? NOD_TARGET : TURN_TARGET;
+        message = target && target !== 'centre'
+          ? `${Math.abs(moved)}° of ${needed}° needed`
+          : `${Math.abs(turned)}° from centre`;
+      }
+      hint.textContent = message;
+      hint.className = 'hint' + (problem ? ' warn' : '');
+      showReadings(probeResult);
+      camera.classList.toggle('ok', !!probeResult.usable);
+    }
 
-  // Show how far the head has actually turned, so the movement is visible while
-  // it is happening rather than the circle just sitting there.
-  if (!message && baseline && probeResult.yaw !== null && probeResult.yaw !== undefined) {
-    const turned = Math.round(probeResult.yaw - baseline.yaw);
-    const nodding = target === 'up' || target === 'down';
-    const moved = nodding ? Math.round(probeResult.pitch ?? 0) : turned;
-    const needed = nodding ? NOD_TARGET : TURN_TARGET;
-    message = target && target !== 'centre'
-      ? `${Math.abs(moved)}° of ${needed}° needed`
-      : `${Math.abs(turned)}° from centre`;
-  }
-  hint.textContent = message;
-  hint.className = 'hint' + (problem ? ' warn' : '');
-  showReadings(probeResult);
-  camera.classList.toggle('ok', !!probeResult.usable);
-}
-
-/** Keep sending frames until `accept` says this one will do, or we run out of patience. */
-async function waitFor(accept, { timeout = STEP_TIMEOUT_MS, target = null, calibrate = false } = {}) {
-  const deadline = Date.now() + timeout;
-  const nudgeAt = Date.now() + 6000;
-  while (!cancelled && Date.now() < deadline) {
-    const blob = await grabFrame();
-    let result;
-    try {
-      result = await probe(blob, calibrate);
-    } catch (error) {
-      status.textContent = 'Live check failed: ' + error;
+    /** Keep sending frames until `accept` says this one will do, or we run out of patience. */
+    async function waitFor(accept, { timeout = STEP_TIMEOUT_MS, target = null, calibrate = false } = {}) {
+      const deadline = Date.now() + timeout;
+      const nudgeAt = Date.now() + 6000;
+      while (!cancelled && Date.now() < deadline) {
+        const blob = await grabFrame();
+        let result;
+        try {
+          result = await probe(blob, calibrate);
+        } catch (error) {
+          status.textContent = 'Live check failed: ' + error;
+          return null;
+        }
+        showHint(result, target);
+        if (Date.now() > nudgeAt && target && !hint.classList.contains('warn')) {
+          hint.textContent = `Still waiting: ${INSTRUCTION[target].toLowerCase()}`;
+        }
+        if (result.usable && accept(result)) return { blob, result };
+        await wait(PROBE_GAP_MS);
+      }
       return null;
     }
-    showHint(result, target);
-    if (Date.now() > nudgeAt && target && !hint.classList.contains('warn')) {
-      hint.textContent = `Still waiting: ${INSTRUCTION[target].toLowerCase()}`;
+
+    function setProgress(done, total) {
+      ring.style.strokeDashoffset = RING * (1 - done / total);
     }
-    if (result.usable && accept(result)) return { blob, result };
-    await wait(PROBE_GAP_MS);
-  }
-  return null;
-}
 
-function setProgress(done, total) {
-  ring.style.strokeDashoffset = RING * (1 - done / total);
-}
+    async function run() {
+      const challenge = 'full';
+      const directions = STEPS[challenge];
+      const total = 1 + directions.length + 1;   // calibration, each direction, the final hold
+      let done = 0;
 
-async function run() {
-  const challenge = 'full';
-  const directions = STEPS[challenge];
-  const total = 1 + directions.length + 1;   // calibration, each direction, the final hold
-  let done = 0;
+      cancelled = false;
+      baseline = null;
+      kept = [];
+      claimed = [];
+      document.getElementById('start').disabled = true;
+      showCaptureStage();
+      status.textContent = '';
 
-  cancelled = false;
-  baseline = null;
-  kept = [];
-  claimed = [];
-  document.getElementById('start').disabled = true;
-  showCaptureStage();
-  status.textContent = '';
+      // 0. Check the camera and the room before asking anyone to move: lighting,
+      //    sharpness, framing and distance must all be right first.
+      portraitBlob = null;
+      startRecording();
+      prompt.textContent = 'Checking your camera';
+      if (!await waitUntilReady()) {
+        status.textContent = 'Starting anyway: the camera view is not ideal, so this may need a retry.';
+      }
 
-  // 0. Check the camera and the room before asking anyone to move: lighting,
-  //    sharpness, framing and distance must all be right first.
-  portraitBlob = null;
-  startRecording();
-  prompt.textContent = 'Checking your camera';
-  if (!await waitUntilReady()) {
-    status.textContent = 'Starting anyway: the camera view is not ideal, so this may need a retry.';
-  }
+      // 1. Learn this person's resting pose (kept on the server, with the document).
+      prompt.textContent = INSTRUCTION.centre;
+      for (let i = 0; i < CALIBRATION_FRAMES; i++) {
+        const step = await waitFor(() => true, { timeout: 40000, calibrate: true });
+        if (!step) return giveUp('We could not see your face clearly. Check your lighting and try again.');
+        kept.push(step.blob);
+      }
+      baseline = { yaw: 0, pitch: 0 };
+      setProgress(++done, total);
 
-  // 1. Learn this person's resting pose (kept on the server, with the document).
-  prompt.textContent = INSTRUCTION.centre;
-  for (let i = 0; i < CALIBRATION_FRAMES; i++) {
-    const step = await waitFor(() => true, { timeout: 40000, calibrate: true });
-    if (!step) return giveUp('We could not see your face clearly. Check your lighting and try again.');
-    kept.push(step.blob);
-  }
-  baseline = { yaw: 0, pitch: 0 };
-  setProgress(++done, total);
+      // 2. One direction at a time. The ring waits until that movement is actually seen.
+      for (const step of directions) {
+        prompt.textContent = INSTRUCTION[step];
+        const accept = (result) => result.direction === step;
+        const got = await waitFor(accept, { target: step });
+        if (!got) return giveUp(`We did not see that. Try again, a little slower: ${INSTRUCTION[step].toLowerCase()}.`);
+        // Keep a second frame straight after: the server needs to see the movement
+        // held, and one frame per step could never satisfy that.
+        claimed.push({ index: kept.length, step });
+        kept.push(got.blob, await grabFrame());
+        setProgress(++done, total);
+      }
 
-  // 2. One direction at a time. The ring waits until that movement is actually seen.
-  for (const step of directions) {
-    prompt.textContent = INSTRUCTION[step];
-    const accept = (result) => result.direction === step;
-    const got = await waitFor(accept, { target: step });
-    if (!got) return giveUp(`We did not see that. Try again, a little slower: ${INSTRUCTION[step].toLowerCase()}.`);
-    // Keep a second frame straight after: the server needs to see the movement
-    // held, and one frame per step could never satisfy that.
-    claimed.push({ index: kept.length, step });
-    kept.push(got.blob, await grabFrame());
-    setProgress(++done, total);
-  }
+      // 3. The portrait. Identity is decided on this one photograph, so it is not
+      //    any old centred frame: the head has to be square to the camera and the
+      //    view has to be usable, held for a moment, exactly as a person would be
+      //    asked to hold still before a shutter. The frames stay for liveness.
+      prompt.textContent = 'Look straight at the camera';
+      hint.textContent = 'Hold still for the photo';
+      let square = 0;
+      for (let attempt = 0; attempt < PORTRAIT_ATTEMPTS && square < PORTRAIT_HOLD_FRAMES; attempt++) {
+        const step = await waitFor((result) =>
+          result.direction === 'centre' &&
+          Math.abs(result.yaw ?? 99) <= PORTRAIT_MAX_DEGREES &&
+          Math.abs(result.pitch ?? 99) <= PORTRAIT_MAX_DEGREES &&
+          result.usable);
+        if (!step) { square = 0; continue; }
+        square += 1;
+        kept.push(step.blob);
+      }
+      if (square < PORTRAIT_HOLD_FRAMES) return giveUp('Look straight at the camera to finish.');
 
-  // 3. The portrait. Identity is decided on this one photograph, so it is not
-  //    any old centred frame: the head has to be square to the camera and the
-  //    view has to be usable, held for a moment, exactly as a person would be
-  //    asked to hold still before a shutter. The frames stay for liveness.
-  prompt.textContent = 'Look straight at the camera';
-  hint.textContent = 'Hold still for the photo';
-  let square = 0;
-  for (let attempt = 0; attempt < PORTRAIT_ATTEMPTS && square < PORTRAIT_HOLD_FRAMES; attempt++) {
-    const step = await waitFor((result) =>
-      result.direction === 'centre' &&
-      Math.abs(result.yaw ?? 99) <= PORTRAIT_MAX_DEGREES &&
-      Math.abs(result.pitch ?? 99) <= PORTRAIT_MAX_DEGREES &&
-      result.usable);
-    if (!step) { square = 0; continue; }
-    square += 1;
-    kept.push(step.blob);
-  }
-  if (square < PORTRAIT_HOLD_FRAMES) return giveUp('Look straight at the camera to finish.');
+      prompt.textContent = 'Taking your photo';
+      await takePortrait();
+      kept.push(portraitBlob);
+      setProgress(++done, total);
 
-  prompt.textContent = 'Taking your photo';
-  await takePortrait();
-  kept.push(portraitBlob);
-  setProgress(++done, total);
+      await submit(challenge);
+    }
 
-  await submit(challenge);
-}
-
-/** Hold the capture until the camera view is good enough, several frames running. */
-async function waitUntilReady() {
-  const deadline = Date.now() + READY_TIMEOUT_MS;
-  let good = 0;
-  while (!cancelled && Date.now() < deadline) {
-    const blob = await grabFrame();
-    let result;
-    try {
-      result = await probe(blob, calibrate);
-    } catch (error) {
-      status.textContent = 'Live check failed: ' + error;
+    /** Hold the capture until the camera view is good enough, several frames running. */
+    async function waitUntilReady() {
+      const deadline = Date.now() + READY_TIMEOUT_MS;
+      let good = 0;
+      while (!cancelled && Date.now() < deadline) {
+        const blob = await grabFrame();
+        let result;
+        try {
+          result = await probe(blob, calibrate);
+        } catch (error) {
+          status.textContent = 'Live check failed: ' + error;
+          return false;
+        }
+        showHint(result);
+        good = result.usable ? good + 1 : 0;
+        if (good === 1 && !result.hints.length) hint.textContent = 'Hold it there';
+        if (good >= READY_FRAMES) return true;
+        await wait(PROBE_GAP_MS);
+      }
       return false;
     }
-    showHint(result);
-    good = result.usable ? good + 1 : 0;
-    if (good === 1 && !result.hints.length) hint.textContent = 'Hold it there';
-    if (good >= READY_FRAMES) return true;
-    await wait(PROBE_GAP_MS);
-  }
-  return false;
-}
 
-function median(values) {
-  const sorted = [...values].sort((a, b) => a - b);
-  return sorted[Math.floor(sorted.length / 2)];
-}
+    function median(values) {
+      const sorted = [...values].sort((a, b) => a - b);
+      return sorted[Math.floor(sorted.length / 2)];
+    }
 
-function giveUp(message) {
-  status.textContent = message;
-  hint.textContent = '';
-  prompt.textContent = 'Press start';
-  document.getElementById('start').disabled = false;
-}
+    function giveUp(message) {
+      status.textContent = message;
+      hint.textContent = '';
+      prompt.textContent = 'Press start';
+      document.getElementById('start').disabled = false;
+    }
 
-async function submit(challenge) {
-  // Freeze on the last shot while the answer comes back, the way a photo booth does.
-  drawSquare(freeze);
-  freeze.hidden = false;
-  video.hidden = true;
-  spinner.hidden = false;
-  hint.textContent = '';
-  prompt.textContent = 'Checking your identity';
+    async function submit(challenge) {
+      // Freeze on the last shot while the answer comes back, the way a photo booth does.
+      drawSquare(freeze);
+      freeze.hidden = false;
+      video.hidden = true;
+      spinner.hidden = false;
+      hint.textContent = '';
+      prompt.textContent = 'Checking your identity';
 
-  const clip = await stopRecording();
+      const clip = await stopRecording();
 
-  const data = new FormData();
-  kept.forEach((blob, index) => data.append('frames', blob, `frame_${index}.jpg`));
-  // The photograph identity is decided on, separate from the liveness frames.
-  if (portraitBlob) data.append('portrait', portraitBlob, 'portrait.jpg');
-  // The clip is evidence of how the check went. Nothing stores it yet.
-  if (clip && clip.size) data.append('video', clip, 'challenge.webm');
-  data.append('challenge', challenge);
-  // Which frame was captured for which step. The server measures each of these
-  // frames itself, so this cannot be used to claim a movement that never
-  // happened; it only says where to look, instead of hoping the movement was
-  // still being held when the next frame arrived.
-  data.append('steps', JSON.stringify(claimed));
+      const data = new FormData();
+      kept.forEach((blob, index) => data.append('frames', blob, `frame_${index}.jpg`));
+      // The photograph identity is decided on, separate from the liveness frames.
+      if (portraitBlob) data.append('portrait', portraitBlob, 'portrait.jpg');
+      // The clip is evidence of how the check went. Nothing stores it yet.
+      if (clip && clip.size) data.append('video', clip, 'challenge.webm');
+      data.append('challenge', challenge);
+      // Which frame was captured for which step. The server measures each of these
+      // frames itself, so this cannot be used to claim a movement that never
+      // happened; it only says where to look, instead of hoping the movement was
+      // still being held when the next frame arrived.
+      data.append('steps', JSON.stringify(claimed));
 
-  try {
-    const url = SESSION_TOKEN
-      ? `/v1/sessions/${SESSION_TOKEN}/face`
-      : `/v1/verifications/${verificationId}/face`;
-    const response = await fetch(url, { method: 'POST', body: data });
-    show(await response.json(), response.ok);
-  } catch (error) {
-    status.textContent = 'Request failed: ' + error;
-    showCaptureStage();
-    document.getElementById('start').disabled = false;
-  } finally {
-    spinner.hidden = true;
-  }
-}
+      try {
+        const url = SESSION_TOKEN
+          ? `/v1/sessions/${SESSION_TOKEN}/face`
+          : `/v1/verifications/${verificationId}/face`;
+        const response = await fetch(url, { method: 'POST', body: data });
+        show(await response.json(), response.ok);
+      } catch (error) {
+        status.textContent = 'Request failed: ' + error;
+        showCaptureStage();
+        document.getElementById('start').disabled = false;
+      } finally {
+        spinner.hidden = true;
+      }
+    }
 
-function showCaptureStage() {
-  stageResult.hidden = true;
-  stageCapture.hidden = false;
-  freeze.hidden = true;
-  video.hidden = false;
-  spinner.hidden = true;
-  hint.textContent = '';
-  camera.classList.remove('ok');
-  ring.style.strokeDashoffset = RING;
-  window.scrollTo({ top: 0, behavior: 'smooth' });
-}
+    function showCaptureStage() {
+      stageResult.hidden = true;
+      stageCapture.hidden = false;
+      freeze.hidden = true;
+      video.hidden = false;
+      spinner.hidden = true;
+      hint.textContent = '';
+      camera.classList.remove('ok');
+      ring.style.strokeDashoffset = RING;
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
 
-function show(body, ok) {
-  status.textContent = '';
-  document.getElementById('json').textContent = JSON.stringify(body, null, 2);
-  if (!ok) {
-    status.textContent = body.detail || 'Request rejected';
-    showCaptureStage();
-    document.getElementById('start').disabled = false;
-    return;
-  }
+    function show(body, ok) {
+      status.textContent = '';
+      document.getElementById('json').textContent = JSON.stringify(body, null, 2);
+      if (!ok) {
+        status.textContent = body.detail || 'Request rejected';
+        showCaptureStage();
+        document.getElementById('start').disabled = false;
+        return;
+      }
 
-  // The result takes the camera's place, so it is the first thing on screen.
-  const capture = body.liveness.capture;
-  document.getElementById('captured').src = capture
-    ? 'data:image/jpeg;base64,' + capture.image_base64
-    : freeze.toDataURL('image/jpeg');
+      // The result takes the camera's place, so it is the first thing on screen.
+      const capture = body.liveness.capture;
+      document.getElementById('captured').src = capture
+        ? 'data:image/jpeg;base64,' + capture.image_base64
+        : freeze.toDataURL('image/jpeg');
 
-  const verdict = document.getElementById('verdict');
-  const pendingJourney = SESSION_TOKEN && body.verification_status === 'in_progress';
-  const reviewJourney = SESSION_TOKEN && body.verification_status === 'needs_review';
-  const label = reviewJourney ? 'Your checks need review'
-    : pendingJourney ? 'Face check complete; verification is still in progress'
-    : (WORDING[body.decision] || body.decision);
-  verdict.className = 'verdict ' + (reviewJourney || pendingJourney ? 'review' : body.decision);
-  verdict.innerHTML = `<strong>${label}</strong>` +
-    (body.reasons.length ? `<span>${body.reasons.join(', ')}</span>` : '') +
-    (body.warnings.length ? `<span class="muted">${body.warnings.join(', ')}</span>` : '');
+      const verdict = document.getElementById('verdict');
+      const pendingJourney = SESSION_TOKEN && body.verification_status === 'in_progress';
+      const reviewJourney = SESSION_TOKEN && body.verification_status === 'needs_review';
+      const label = reviewJourney ? 'Your checks need review'
+        : pendingJourney ? 'Face check complete; verification is still in progress'
+          : (WORDING[body.decision] || body.decision);
+      verdict.className = 'verdict ' + (reviewJourney || pendingJourney ? 'review' : body.decision);
+      verdict.innerHTML = `<strong>${label}</strong>` +
+        (body.reasons.length ? `<span>${body.reasons.join(', ')}</span>` : '') +
+        (body.warnings.length ? `<span class="muted">${body.warnings.join(', ')}</span>` : '');
 
-  const challenge = body.liveness.challenge;
-  const matched = body.match
-    ? `<dt>how alike the two faces are</dt><dd>${body.match.score ?? '-'} (a match needs ${body.match.threshold})</dd>
+      const challenge = body.liveness.challenge;
+      const matched = body.match
+        ? `<dt>how alike the two faces are</dt><dd>${body.match.score ?? '-'} (a match needs ${body.match.threshold})</dd>
        <dt>compared against</dt><dd>${body.match.check?.details?.portrait_source === 'frame' ? 'the clearest frame of you' : 'the photo taken at the end'}</dd>`
-    : `<dt>face match</dt><dd>not applicable: a birth certificate carries no photograph</dd>
+        : `<dt>face match</dt><dd>not applicable: a birth certificate carries no photograph</dd>
        <dt>portrait kept</dt><dd>${body.portrait_kept ? 'yes' : 'no'}</dd>`;
-  document.getElementById('scores').innerHTML = matched + `
+      document.getElementById('scores').innerHTML = matched + `
     <dt>movements seen</dt><dd>${challenge.completed.join(', ') || 'none'}${challenge.missing.length ? ' · not seen: ' + challenge.missing.join(', ') : ''}</dd>
     <dt>frames with your face in</dt><dd>${body.liveness.frames_with_face} of ${body.liveness.frames_received}</dd>
     <dt>a real face, not a photo</dt><dd>${body.liveness.planarity ?? '-'}% depth (a printed photo scores under 1.2)</dd>
     <dt>time taken</dt><dd>${body.processing_ms} ms</dd>`;
 
-  document.getElementById('poses').textContent = body.liveness.poses
-    .map((pose) => `frame ${String(pose.index).padStart(2)}  faces=${pose.faces}  yaw=${pose.yaw ?? '-'}  pitch=${pose.pitch ?? '-'}  ${pose.direction ?? ''}`)
-    .join('\n');
+      document.getElementById('poses').textContent = body.liveness.poses
+        .map((pose) => `frame ${String(pose.index).padStart(2)}  faces=${pose.faces}  yaw=${pose.yaw ?? '-'}  pitch=${pose.pitch ?? '-'}  ${pose.direction ?? ''}`)
+        .join('\n');
 
-  document.getElementById('lead').textContent = 'Result of the check just completed.';
-  stageCapture.hidden = true;
-  stageResult.hidden = false;
-  document.getElementById('start').disabled = false;
-  window.scrollTo({ top: 0, behavior: 'smooth' });
+      document.getElementById('lead').textContent = 'Result of the check just completed.';
+      stageCapture.hidden = true;
+      stageResult.hidden = false;
+      document.getElementById('start').disabled = false;
+      window.scrollTo({ top: 0, behavior: 'smooth' });
 
-  const targetRedirect = pendingJourney ? `/verify/${SESSION_TOKEN}`
-    : safeRedirect(body.redirect_url) || sessionRedirectUrl;
-  const finished = SESSION_TOKEN
-    ? ['passed', 'needs_review'].includes(body.verification_status) || pendingJourney
-    : body.decision === 'pass';
-  if (targetRedirect && finished) {
-    const section = document.getElementById('redirect-section');
-    const btn = document.getElementById('redirect-btn');
-    if (section && btn) {
-      btn.href = targetRedirect;
-      section.hidden = false;
+      const targetRedirect = pendingJourney ? `/verify/${SESSION_TOKEN}`
+        : safeRedirect(body.redirect_url) || sessionRedirectUrl;
+      const finished = SESSION_TOKEN
+        ? ['passed', 'needs_review'].includes(body.verification_status) || pendingJourney
+        : body.decision === 'pass';
+      if (targetRedirect && finished) {
+        const section = document.getElementById('redirect-section');
+        const btn = document.getElementById('redirect-btn');
+        if (section && btn) {
+          btn.href = targetRedirect;
+          section.hidden = false;
+        }
+        setTimeout(() => {
+          window.location.href = targetRedirect;
+        }, 2000);
+      }
     }
-    setTimeout(() => {
-      window.location.href = targetRedirect;
-    }, 2000);
-  }
-}
 
-document.getElementById('start').addEventListener('click', async () => {
-  try {
-    if (!video.srcObject) await startCamera();
-    await run();
-  } catch (error) {
-    status.textContent = 'Camera unavailable: ' + error;
-    document.getElementById('start').disabled = false;
-  }
-});
-document.getElementById('again').addEventListener('click', async () => {
-  document.getElementById('lead').textContent = 'Follow the prompts. The circle only fills once the camera sees you actually move.';
-  showCaptureStage();
-  await run();
-});
+    document.getElementById('start').addEventListener('click', async () => {
+      try {
+        if (!video.srcObject) await startCamera();
+        await run();
+      } catch (error) {
+        status.textContent = 'Camera unavailable: ' + error;
+        document.getElementById('start').disabled = false;
+      }
+    });
+    document.getElementById('again').addEventListener('click', async () => {
+      document.getElementById('lead').textContent = 'Follow the prompts. The circle only fills once the camera sees you actually move.';
+      showCaptureStage();
+      await run();
+    });
 
-loadSession();
-</script>
+    loadSession();
+  </script>
 </body>
+
 </html>

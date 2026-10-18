@@ -111,6 +111,11 @@ def test_redirect_accepts_https():
     assert make(redirect_url="https://client.example.com/done?ref=1").redirect_url == "https://client.example.com/done?ref=1"
 
 
+def test_redirect_accepts_app_deep_links():
+    assert make(redirect_url="taichat://kyc-complete").redirect_url == "taichat://kyc-complete"
+    assert make(redirect_url="myapp://profile/kyc?status=done").redirect_url == "myapp://profile/kyc?status=done"
+
+
 def test_empty_and_missing_values_are_fine():
     assert make().callback_url is None
     assert make(callback_url="", redirect_url="").redirect_url is None
