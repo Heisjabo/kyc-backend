@@ -74,6 +74,7 @@ def _as_response(verification: Verification) -> VerificationResponse:
         reasons=verification.reasons,
         warnings=verification.warnings,
         aml=latest[VerificationStep.aml].result or None if VerificationStep.aml in latest else None,
+        document_group=service.document_group(verification, latest.get(VerificationStep.document)),
         steps=[
             StepResponse(
                 step=step.step.value,

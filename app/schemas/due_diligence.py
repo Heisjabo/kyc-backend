@@ -11,6 +11,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from app.schemas.document import ChosenDocumentGroup
+
 FieldType = Literal[
     "text",          # one line
     "textarea",      # a paragraph
@@ -193,6 +195,9 @@ class ResponseRow(BaseModel):
     form_name: str | None
     status: str
     answers: list[Answer]
+    # The document section the same person ticked on this verification, which
+    # is where "I do not hold a passport" is now said.
+    document_group: ChosenDocumentGroup | None = None
     submitted_at: datetime | None
 
 

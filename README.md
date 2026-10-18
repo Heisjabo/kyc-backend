@@ -437,6 +437,14 @@ step refuses a document without one, or one that section does not accept, with
 read as an `id_card`: the section records what the person said, it is not a
 separate document check.
 
+The section ticked is reported as `document_group`, `{"key": ..., "label": ...}`
+or `null`, on `GET /v1/verifications/{reference}`, in the callback body, and on
+each row of the due diligence responses. That is where "I do not hold a
+passport" is recorded now: the `net_worth_assessment_no_passport` form, which
+asked for a typed "confirm", is archived (migration a8c1e5f37d20) and refused
+with 422 like any inactive form. Send `net_worth_assessment` with
+`document_groups` instead.
+
 `address_types` does the same for the proof of address, like Shufti's
 `address.supported_types`: any of `utility_bill`, `bank_statement`,
 `credit_card_statement`, `rent_agreement`, `driving_license`. Left out, every

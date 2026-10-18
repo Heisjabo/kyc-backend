@@ -313,6 +313,48 @@ def test_the_chosen_group_is_kept_with_the_document(client, api_key, db_session,
                                                 Step.step == "document"))
     assert step.extracted["document_group"] == "foreign_resident"
 
+    # The client reads it back on the verification, with the label the person ticked.
+    read = client.get(f"/v1/verifications/{body['reference']}", headers=api_key).json()
+    assert read["document_group"] == {
+        "key": "foreign_resident",
+        "label": "I am a foreigner living or working in my registered country",
+    }
+
+
+def test_without_groups_no_group_is_reported(client, api_key, monkeypatch):
+    stub_document(monkeypatch)
+    body = open_verification(client, api_key)
+    client.post(f"/v1/sessions/{token_of(body)}/document", data={"document_type": "id_card"},
+                files={"front": ("front.jpg", image_bytes(), "image/jpeg")})
+    read = client.get(f"/v1/verifications/{body['reference']}", headers=api_key).json()
+    assert read["document_group"] is None
+
+
+def test_form_responses_carry_the_document_group(client, api_key, db_session, monkeypatch):
+    """The "I do not hold a passport" answer moved off the form and onto the
+    document step, so the list of answers shows which section was ticked."""
+    from app.api.v1.routes.due_diligence_forms import response_list
+    from app.db.models import VerificationStep
+    from app.services import verifications as service
+
+    stub_document(monkeypatch)
+    body = open_verification(client, api_key, document_groups="residency")
+    client.post(
+        f"/v1/sessions/{token_of(body)}/document",
+        data={"document_type": "id_card", "document_group": "citizen_no_passport"},
+        files={"front": ("front.jpg", image_bytes(), "image/jpeg")},
+    )
+    verification = db_session.scalar(select(Verification).where(Verification.reference == body["reference"]))
+    answered = service.open_step(db_session, verification, VerificationStep.due_diligence)
+    service.finish_step(db_session, answered, status=StepStatus.passed, reasons=[], warnings=[],
+                        result={"form": {"id": "net_worth_assessment", "name": "Net worth", "fields": []}})
+    db_session.commit()
+
+    row = response_list(db_session, form_id=None, limit=10, offset=0).items[0]
+    assert row.reference == body["reference"]
+    assert row.document_group.key == "citizen_no_passport"
+    assert row.document_group.label == "I don't have a passport but I am a citizen of my registered country"
+
 
 def test_what_the_document_proves_moves_onto_the_person(client, api_key, db_session, monkeypatch):
     stub_document(monkeypatch)

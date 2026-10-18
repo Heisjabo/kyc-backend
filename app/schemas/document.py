@@ -4,6 +4,14 @@ from enum import Enum
 from pydantic import BaseModel
 
 
+class ChosenDocumentGroup(BaseModel):
+    """The section of the document step the person ticked, when the client set
+    document_groups: its key, and the label they read when they ticked it."""
+
+    key: str
+    label: str | None = None
+
+
 class DocumentType(str, Enum):
     passport = "passport"
     id_card = "id_card"

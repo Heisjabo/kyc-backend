@@ -13,6 +13,7 @@ from pydantic import BaseModel, EmailStr, Field, field_validator, model_validato
 from app.core import urls
 from app.core.config import settings
 from app.schemas.console import ConsoleApplicant, ConsoleCheck, ConsoleClient, ConsoleDocument, ConsoleFile, ConsoleReviewEvent
+from app.schemas.document import ChosenDocumentGroup
 from app.screening.yente import ScreeningResult
 
 
@@ -219,6 +220,8 @@ class VerificationResponse(BaseModel):
     reasons: list[str]
     warnings: list[str]
     steps: list[StepResponse]
+    # The document section the person ticked; None without document_groups.
+    document_group: ChosenDocumentGroup | None = None
     aml: ScreeningResult | None = None
     expires_at: datetime | None
     created_at: datetime
