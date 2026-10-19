@@ -310,7 +310,11 @@ def ai_generated_flag(result: dict | None) -> bool | None:
     scored and none did, null when the step could not look: no image large enough,
     or the detector not installed.
     """
-    for check in (result or {}).get("checks", []):
+    checks = (result or {}).get("checks", [])
+    # A file that says it was made by an AI tool settles it, whatever the detector scored.
+    if any(c.get("name") == "ai_content_credentials" and AI_GENERATED in (c.get("warnings") or []) for c in checks):
+        return True
+    for check in checks:
         if check.get("name") != "ai_generated":
             continue
         if check.get("status") == "skipped":

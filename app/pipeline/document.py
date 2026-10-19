@@ -23,7 +23,7 @@ from app.engines.image import InvalidImageError, decode_image
 from app.engines.mrz import MrzResult, parse_mrz_text, read_mrz
 from app.engines.ocr import read_document
 from app.engines.quality import assess_quality
-from app.pipeline.ai_image import check_ai_generated
+from app.pipeline.ai_image import check_ai_generated, check_content_credentials
 from app.pipeline.document_probe import _looks_sideways
 from app.rules import document as rules
 from app.schemas.document import (
@@ -124,6 +124,7 @@ def scan_document(
     #     as received, and the portrait cut from the front, since a forger may
     #     generate only the face and paste it onto a real card.
     checks.append(check_ai_generated(_ai_images(images), subject="document"))
+    checks.append(check_content_credentials([("front", front), ("back", back)], subject="document"))
 
     # 5. MRZ: first from the OCR text, then Tesseract as a second reader.
     mrz = _find_mrz(document_type, images, ocr_lines)

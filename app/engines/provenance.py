@@ -94,5 +94,38 @@ def image_signals(data: bytes) -> dict:
     return found
 
 
+# What a generator writes into the file to say it made it. IPTC's DigitalSourceType values, which
+# C2PA content credentials and XMP both carry: an image drawn by a model, or a real one with
+# model-drawn parts added.
+AI_SOURCE_TYPES = (
+    b"compositeWithTrainedAlgorithmicMedia", b"trainedAlgorithmicMedia", b"compositeSynthetic",
+)
+# Tool names that appear in a credentials block, only used to say which tool signed it.
+GENERATORS = (
+    b"Google", b"OpenAI", b"DALL-E", b"ChatGPT", b"Adobe Firefly", b"Midjourney", b"Imagen",
+    b"Gemini", b"Microsoft", b"Stability", b"Leonardo", b"Ideogram",
+)
+
+
+def content_credentials(data: bytes) -> dict:
+    """Does the file carry C2PA content credentials, and do they say it was made by AI?
+
+    Several generators (Google, OpenAI, Adobe, Microsoft) sign the images they make with
+    credentials that say so. This looks for the credentials block and the standard words that
+    declare a generated image. It does not verify the signature: a forger gains nothing by
+    adding a claim that their own image is generated, and one who strips the credentials leaves
+    nothing to find. So a hit is strong evidence and a miss proves nothing.
+    """
+    found: dict = {}
+    if b"c2pa" in data and b"jumb" in data:
+        found["CONTENT_CREDENTIALS_PRESENT"] = "C2PA manifest"
+    declared = [t.decode() for t in AI_SOURCE_TYPES if t in data]
+    if declared:
+        tools = [g.decode() for g in GENERATORS if g in data] if "CONTENT_CREDENTIALS_PRESENT" in found else []
+        found["AI_GENERATED_DECLARED"] = declared[0] + (f" ({', '.join(tools)})" if tools else "")
+    return found
+
+
 def signals(data: bytes) -> dict:
-    return pdf_signals(data) if data[:5] == b"%PDF-" or b"%PDF-" in data[:1024] else image_signals(data)
+    history = pdf_signals(data) if data[:5] == b"%PDF-" or b"%PDF-" in data[:1024] else image_signals(data)
+    return {**history, **content_credentials(data)}

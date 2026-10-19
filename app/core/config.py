@@ -77,6 +77,9 @@ class Settings(BaseSettings):
     # a generative "enhance" app, so it flags rather than refuses.
     AI_IMAGE_SUSPECT_THRESHOLD: float = 0.5
     AI_IMAGE_DETECT_THRESHOLD: float = 0.9
+    # What to do with a file whose own credentials say an AI tool made it: "review" sends the
+    # step to a person, "flag" records it and carries on, "off" does not look.
+    AI_CONTENT_CREDENTIALS_ACTION: str = "review"
 
     # How long a verification link works for, in minutes. Shufti's default is
     # 60 and a client can override it per request with ttl.

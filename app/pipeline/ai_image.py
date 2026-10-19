@@ -56,6 +56,8 @@ MODEL = "community-forensics-vit-s (CVPR 2025)"
 # threshold. One code for every subject: the details say which image it was.
 AI_GENERATED = "AI_GENERATED_IMAGE"
 AI_SUSPECTED = "AI_GENERATED_SUSPECTED"
+# The file itself says an AI tool made it (content credentials). Not an estimate.
+AI_DECLARED = "AI_GENERATED_DECLARED"
 
 
 def detected(check: CheckResult) -> bool | None:
@@ -115,3 +117,37 @@ def check_ai_generated(images: list[tuple[str, np.ndarray | None]], *, subject: 
         return CheckResult(name="ai_generated", status=CheckStatus.passed,
                            warnings=[AI_SUSPECTED], details=details)
     return CheckResult(name="ai_generated", status=CheckStatus.passed, details=details)
+
+
+def check_content_credentials(files: list[tuple[str, bytes | None]], *, subject: str) -> CheckResult:
+    """Do the files themselves say an AI tool made them?
+
+    Reads the credentials a generator signs into its images (see engines/provenance.py). This
+    is separate from the detector above: it needs no model, sends nothing anywhere, and is
+    certain when it fires. It misses anything the generator did not sign or that had its
+    metadata stripped, so it adds to the detector instead of replacing it.
+
+    AI_CONTENT_CREDENTIALS_ACTION decides what a hit does: "review" sends the step to a
+    person, "flag" only records it, "off" does not look.
+    """
+    from app.engines import provenance
+
+    action = settings.AI_CONTENT_CREDENTIALS_ACTION
+    if action == "off":
+        return CheckResult(name="ai_content_credentials", status=CheckStatus.skipped)
+    found: dict = {}
+    for _, data in files:
+        if data:
+            found.update(provenance.content_credentials(data))
+    declared = found.get("AI_GENERATED_DECLARED")
+    details = {"subject": subject, "credentials_present": "CONTENT_CREDENTIALS_PRESENT" in found}
+    if not declared:
+        return CheckResult(name="ai_content_credentials", status=CheckStatus.passed, details=details)
+    details["declared"] = declared
+    return CheckResult(
+        name="ai_content_credentials",
+        status=CheckStatus.review if action == "review" else CheckStatus.passed,
+        reasons=[AI_DECLARED] if action == "review" else [],
+        warnings=[AI_GENERATED] + ([] if action == "review" else [AI_DECLARED]),
+        details=details,
+    )

@@ -136,11 +136,17 @@ def scan_address_proof(
     for data in (front, back):
         if data:
             traces.update(provenance.signals(data))
+    declared = settings.AI_CONTENT_CREDENTIALS_ACTION != "off" and "AI_GENERATED_DECLARED" in traces
+    # Credentials alone (a photo taken with a modern phone may carry them) are not a reason.
+    history = {k: v for k, v in traces.items() if k not in ("CONTENT_CREDENTIALS_PRESENT", "AI_GENERATED_DECLARED")}
+    reasons = (["POSSIBLE_TAMPERING"] if history else []) + (
+        ["AI_GENERATED_DECLARED"] if declared and settings.AI_CONTENT_CREDENTIALS_ACTION == "review" else []
+    )
     checks.append(
         CheckResult(
             name="address_document_provenance",
-            status=CheckStatus.review if traces else CheckStatus.passed,
-            reasons=["POSSIBLE_TAMPERING"] if traces else [],
+            status=CheckStatus.review if reasons else CheckStatus.passed,
+            reasons=reasons,
             details={"signals": traces},
         )
     )
