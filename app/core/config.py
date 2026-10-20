@@ -165,6 +165,15 @@ class Settings(BaseSettings):
     MAX_API_KEYS_PER_ACCOUNT: int = 10
     # Verifications one account may open in a day (0 is no limit).
     MAX_VERIFICATIONS_PER_DAY: int = 5000
+
+    # Billing (app/services/billing.py). Usage is always metered. While this is
+    # off nothing is refused for want of credit or plan, so clients already
+    # live are not cut off the day billing ships; turn it on once every
+    # existing client is on the plan they should be.
+    BILLING_ENFORCED: bool = False
+    # Shared with the Pangolin Sign server, which presents it to reserve and
+    # settle Sign requests (/v1/billing/sign/*). Empty turns those endpoints off.
+    SIGN_BILLING_SECRET: str = ""
     # The longest side of an uploaded image or PDF page, in pixels, checked before it is decoded.
     MAX_IMAGE_SIDE_PX: int = 8000
     MAX_IMAGE_PIXELS: int = 40_000_000

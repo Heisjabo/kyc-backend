@@ -18,7 +18,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.services import platform_settings
+from app.services import billing, platform_settings
 from app.engines.fields import to_alpha3
 from app.pipeline.ai_image import AI_GENERATED
 from app.db.models import (
@@ -126,7 +126,12 @@ def create_verification(
     ttl_minutes: int | None = None,
     settings_echo: dict | None = None,
 ) -> Verification:
-    """Open a session. Everything else in the flow hangs off what this returns."""
+    """Open a session. Everything else in the flow hangs off what this returns.
+
+    Takes one KYC unit off the account's credit in the same transaction, so a
+    verification never exists without the unit it will be charged against.
+    Raises billing.OutOfCredit, with nothing written, when there is none left.
+    """
     applicant = find_or_create_applicant(db, account_id, client_customer_id, claimed)
 
     token = secrets.token_urlsafe(32)
@@ -154,6 +159,7 @@ def create_verification(
     )
     db.add(verification)
     db.flush()
+    billing.reserve(db, account_id, "kyc", verification_id=verification.id)
 
     # One pending step per service, in the order asked for, so the session page
     # knows what to ask next and the client can see what is outstanding.
@@ -211,6 +217,7 @@ def expire_if_due(db: Session, verification: Verification) -> Verification:
         verification.status = VerificationStatus.expired
         verification.event = EVENT_TIMEOUT
         verification.completed_at = datetime.now(UTC)
+        billing.on_status(db, verification)
         db.commit()
         db.refresh(verification)
     return verification
@@ -234,6 +241,7 @@ def expire_overdue(db: Session, limit: int = 500) -> int:
         verification.status = VerificationStatus.expired
         verification.event = EVENT_TIMEOUT
         verification.completed_at = datetime.now(UTC)
+        billing.on_status(db, verification)
     db.commit()
     return len(overdue)
 
@@ -264,6 +272,7 @@ def attempts_exhausted(db: Session, verification: Verification, step: Verificati
         verification.event = EVENT_STATUS_CHANGED
         verification.completed_at = datetime.now(UTC)
         verification.reasons = list(dict.fromkeys([*(verification.reasons or []), ATTEMPTS_EXHAUSTED]))
+        billing.on_status(db, verification)
         db.commit()
         notify_client(db, verification)
     return True
@@ -383,6 +392,7 @@ def settle(db: Session, verification: Verification) -> Verification:
 
     verification.reasons = list(dict.fromkeys(reasons))
     verification.warnings = list(dict.fromkeys(warnings))
+    billing.on_status(db, verification)
     db.commit()
     db.refresh(verification)
 
