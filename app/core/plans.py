@@ -5,8 +5,8 @@ components/pricing/plans.tsx): change them together. They live in code rather
 than in a table so that the page and the rules move in one release, and so a
 plan's features can be read in review rather than looked up in a database.
 
-A feature named here that does not exist yet costs nothing: it is listed so that
-the day it is built, which plans may use it is already decided.
+Only features the product has today are named here. Add one to its plan when
+it is built, and to the pricing page in the same release.
 """
 
 PLANS = ("free", "payg", "enterprise")
@@ -30,25 +30,13 @@ _FREE = {
 }
 _PAYG = _FREE | {
     "aml",
-    "know_your_business",
-    "face_authentication",
     "address",
     "age_verification",
-    "email_mfa",
     "due_diligence_form",
-    "fast_id",
-    "signer_identity_verification",
 }
-_ENTERPRISE = _PAYG | {
-    "phone_mfa",
-    "aml_monitoring",
-    "business_aml",
-    "aml_bulk",
-    "risk_assessment",
-    "consent_verification",
-    "blocklist",
-    "branding",
-}
+# Enterprise has no features of its own yet: it differs in its terms (an agreed
+# rate, overdraft), which live on the account.
+_ENTERPRISE = _PAYG
 
 PLAN_FEATURES: dict[str, frozenset[str]] = {
     "free": frozenset(_FREE),
@@ -63,5 +51,4 @@ SERVICE_FEATURES = {
     "address": "address",
     "due_diligence": "due_diligence_form",
     "aml": "aml",
-    "consent": "consent_verification",
 }
