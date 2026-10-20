@@ -1,4 +1,4 @@
-"""Every client's API keys, for Pangolin staff in the admin console.
+"""Every client's API keys, for staff in the admin console.
 
 Only what the owner sees in their own list: the name, the prefix and the dates.
 Never the key, which nobody holds after it is shown once, and never its hash.

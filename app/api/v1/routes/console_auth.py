@@ -1,4 +1,4 @@
-"""Signing in to the admin console (pangolin-admin).
+"""Signing in to the admin console.
 
 Staff are accounts with a console role. They sign in here with their email and
 password and get a console token, which only the console endpoints accept.

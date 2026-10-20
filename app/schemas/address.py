@@ -7,7 +7,7 @@ from app.schemas.document import CheckResult, Decision
 
 
 class ProofType(str, Enum):
-    """What the person is uploading, matching the supported_types we send Shufti."""
+    """What the person is uploading, matching Shufti's address supported_types."""
 
     utility_bill = "utility_bill"
     bank_statement = "bank_statement"

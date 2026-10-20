@@ -1,6 +1,6 @@
 """What a client may use, what it has left, and what it has used.
 
-Credit is counted in units: one verification, or one Sign request. An account's
+Credit is counted in units: one verification. An account's
 balance is the `remaining` of its credit grants (models.CreditGrant), and every
 unit that moves is written down in usage_events, in three moves:
 
@@ -8,8 +8,8 @@ unit that moves is written down in usage_events, in three moves:
     then, so two requests racing for the last unit cannot both get it.
   * **commit**, when it is decided (passed, failed or sent to review). This is
     the charge. Nothing moves on the grant; the unit was already taken.
-  * **release**, when it never was decided: the link expired, or Sign
-    cancelled the request. The unit goes back on the grant it came from.
+  * **release**, when it never was decided: the link expired. The unit goes
+    back on the grant it came from.
 
 Free grants are spent before paid ones, then the oldest first, so paid credit
 is kept for last.
@@ -197,7 +197,7 @@ def reserve(
     verification_id: int | None = None,
     external_ref: str | None = None,
 ) -> UsageEvent:
-    """Take one unit for a verification or a Sign request that is starting.
+    """Take one unit for a verification that is starting.
 
     Raises OutOfCredit when nothing is left and the account may not run past
     zero. A second reserve for the same subject returns the first.

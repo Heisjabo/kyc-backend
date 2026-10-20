@@ -70,7 +70,7 @@ def scan_address_proof(
         )
 
     # A PO box is refused before anything is read: it is not a place anybody
-    # lives, and our Shufti request says po_box: false for the same reason.
+    # lives, the same as Shufti's po_box: false.
     if is_po_box(claimed_address):
         checks.append(
             CheckResult(

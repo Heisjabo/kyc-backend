@@ -291,7 +291,7 @@ def _parse_name(text: str) -> str | None:
 
 
 def to_alpha3(value: str | None) -> str | None:
-    """Accept a country as 'RW' (what our backend sends Shufti), 'RWA' or 'Rwanda'.
+    """Accept a country as 'RW', 'RWA' or 'Rwanda'.
 
     Returns the 3-letter code used by the MRZ and by this service, or None.
     """

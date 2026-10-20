@@ -1,4 +1,4 @@
-"""Every account, for Pangolin staff in the admin console.
+"""Every account, for staff in the admin console.
 
 A client is an account calling the API; staff are accounts with a console role.
 The list shows both, with each account's role, and filters by it. The client
@@ -10,8 +10,9 @@ account's console role. Only an owner gives or takes the owner role, nobody
 changes their own, and the last active owner keeps it. Both are kept in
 audit_events (account.created, account.access_updated).
 
-The list filters the way the Tuesday Markets admin filters its users: a search,
-the account status, the last sign-in, the country and when the account was made.
+The list filters by a search,
+the account status, the last sign-in, the country, the billing plan and when the
+account was made.
 Listing writes nothing.
 """
 
@@ -24,6 +25,7 @@ from sqlalchemy.orm import Session, selectinload
 from app.api.deps import console_product
 from app.api.v1.routes.console_team import _active_owners, _check_products, _check_role, _record, team_manager
 from app.core import security
+from app.core.plans import PLANS
 from app.api.v1.routes.console_verifications import _EFFECTIVE_STATUS, _latest_scans, _summary
 from app.db.models import CONSOLE_ROLES, Account, ApiKey, Applicant, Verification, VerificationStatus
 from app.db.session import get_session
@@ -101,6 +103,7 @@ def _summary_fields(account: Account, row) -> dict:
         "active_keys": row.active_keys or 0,
         "role": account.console_role,
         "products": list(account.console_products or []),
+        "plan": account.plan,
     }
 
 
@@ -127,6 +130,7 @@ def list_clients(
     joined_from: date | None = Query(default=None, description="Made on or after this day (UTC)"),
     joined_to: date | None = Query(default=None, description="Made on or before this day (UTC)"),
     role: str | None = Query(default=None, description="client, staff, or a console role"),
+    plan: str | None = Query(default=None, description="free, payg or enterprise"),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=25, ge=1, le=100),
     _: Account = Depends(console_product("kyc")),
@@ -140,6 +144,8 @@ def list_clients(
 
     if role is not None and role not in ("client", "staff", *CONSOLE_ROLES):
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Role must be client, staff or a console role")
+    if plan is not None and plan not in PLANS:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, f"Plan must be one of: {', '.join(PLANS)}")
 
     filters = []
     if role == "client":
@@ -166,6 +172,8 @@ def list_clients(
         filters.append(Account.last_login_at >= func.now() - timedelta(days=_LAST_SIGN_IN[last_sign_in]))
     if country:
         filters.append(Account.country == country)
+    if plan is not None:
+        filters.append(Account.plan == plan)
     if joined_from is not None:
         filters.append(Account.created_at >= _day_start(joined_from))
     if joined_to is not None:

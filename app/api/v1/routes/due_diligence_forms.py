@@ -1,4 +1,4 @@
-"""Due diligence forms, for the client and for Pangolin staff.
+"""Due diligence forms, for the client and for staff.
 
   * **A client**, with their API key, lists the forms they have been given, to
     know which `form_id` to send when opening a verification.
@@ -129,7 +129,7 @@ def client_forms(
     db: Session = Depends(get_session),
 ) -> list[ClientForm]:
     """For a client, the forms it may attach to a verification by sending
-    `form_id`; for Pangolin staff, every form. Each with how many times it has
+    `form_id`; for staff, every form. Each with how many times it has
     been answered on the caller's verifications."""
     given = (
         forms.forms_for(db, caller.account.id)
@@ -162,7 +162,7 @@ def client_forms(
 @router.get("/due-diligence/responses", response_model=ResponseList)
 def client_responses(
     form_id: str | None = Query(default=None, description="Only this form's answers"),
-    client_id: int | None = Query(default=None, description="Pangolin staff only: one client's"),
+    client_id: int | None = Query(default=None, description="Staff only: one client's"),
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
     caller: Caller = Depends(current_caller),

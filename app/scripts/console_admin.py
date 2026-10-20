@@ -1,16 +1,16 @@
-"""Give someone access to the admin console (pangolin-admin), from the command line.
+"""Give someone access to the admin console, from the command line.
 
 There is no screen for this yet, and the first owner has to come from somewhere.
 Run it with the environment of the database you mean (DATABASE_URL), for example
 on the production server:
 
-    python -m app.scripts.console_admin create --email you@tuesday.africa \\
-        --first-name Jean --last-name Mugisha --role owner --products kyc,sign
+    python -m app.scripts.console_admin create --email you@example.com \\
+        --first-name Jean --last-name Mugisha --role owner --products kyc
 
-    python -m app.scripts.console_admin grant --email someone@tuesday.africa \\
+    python -m app.scripts.console_admin grant --email someone@example.com \\
         --role reviewer --products kyc
 
-    python -m app.scripts.console_admin revoke --email someone@tuesday.africa
+    python -m app.scripts.console_admin revoke --email someone@example.com
 
 `create` opens a new account and asks for its password without echoing it.
 `grant` gives an existing account a console role. `revoke` takes it away again.

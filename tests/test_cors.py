@@ -12,7 +12,7 @@ from fastapi.testclient import TestClient
 
 from app.core.config import settings
 
-JOURNEY = "https://pangolinkyc.tuesday.africa"
+JOURNEY = "https://kyc.example.com"
 
 
 def build(monkeypatch, origins: str) -> TestClient:

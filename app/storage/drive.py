@@ -1,6 +1,6 @@
 """Google Drive as the evidence store.
 
-Credentials are a service account key, the way our database backups reach Drive.
+Credentials are a Google Cloud service account key.
 A service account owns no Drive storage of its own, so the folder has to be on a
 Shared Drive with the service account as a member, or uploads come back with
 "Service Accounts do not have storage quota". The access token is fetched from

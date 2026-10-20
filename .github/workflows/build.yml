@@ -38,7 +38,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # Written the way tuesday-backend writes it: one echo per setting, naming the
+      # One echo per setting, naming the
       # secret and writing it on the same line. A setting added to
       # app/core/config.py that a deployment has to set is added here, once.
       #
@@ -84,8 +84,7 @@ jobs:
             echo "RUN_MIGRATIONS=${{ secrets.RUN_MIGRATIONS }}";
           } > .env.all
 
-          # The one thing tuesday-backend does not have to do, and the only reason
-          # this step is not just the block above. pydantic refuses an empty string
+          # The only reason this step is not just the block above. pydantic refuses an empty string
           # where an int or a bool belongs, so an unset secret arriving as
           # SESSION_TTL_MINUTES= stops the service instead of letting it fall back to
           # 60. NestJS reads '' and carries on. So lines with no value are dropped,
@@ -193,10 +192,12 @@ jobs:
           set -e
           mkdir -p var/evidence
           chmod -R 777 var/evidence
-          docker compose up --build -d
+          # --remove-orphans takes down containers of services no longer in
+          # docker-compose.yml, so a renamed service does not keep the old port.
+          docker compose up --build -d --remove-orphans
           # Dangling images only. A full `docker system prune -af` would throw away
-          # the build cache, and this image installs TensorFlow and compiles
-          # insightface: the next deploy would take twenty minutes instead of two.
+          # the build cache, and this image compiles insightface: the next deploy
+          # would take twenty minutes instead of two.
           docker image prune -f
 
       - name: Wait for it to answer
@@ -210,5 +211,5 @@ jobs:
             sleep 5
           done
           echo "the service did not become healthy; last 80 lines of its log:"
-          docker logs --tail 80 kyc-api
+          docker logs --tail 80 kyc-platform
           exit 1

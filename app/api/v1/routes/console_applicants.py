@@ -1,4 +1,4 @@
-"""Every applicant, for Pangolin staff in the admin console.
+"""Every applicant, for staff in the admin console.
 
 An applicant is a person a client has asked us to verify, kept across their
 verifications under one customer id. Each is listed with their most recent

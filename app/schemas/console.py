@@ -1,6 +1,6 @@
 """What the admin console's endpoints take and return.
 
-The console is pangolin-admin, used by Pangolin staff for both products. Its
+The console is used by staff. Its
 sign-in reuses the account's email and password; only the response differs, in
 saying what the person may do there. Its verification views see every client's
 verifications, unlike the client API, which is scoped to one account.
@@ -168,6 +168,8 @@ class ConsoleClientSummary(BaseModel):
     # client account, and the console products it may open.
     role: str | None = None
     products: list[str] = []
+    # The billing plan: free, payg or enterprise.
+    plan: str = "free"
 
 
 class ConsoleClientOverview(BaseModel):

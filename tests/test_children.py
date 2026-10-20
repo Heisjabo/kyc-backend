@@ -22,7 +22,7 @@ from app.main import app
 from app.schemas.document import CheckResult, CheckStatus, Decision, DocumentCheckResponse, ExtractedFields
 
 ACCOUNT = {
-    "email": "children@tuesday.africa", "password": "horse-battery", "first_name": "Jean",
+    "email": "children@example.com", "password": "horse-battery", "first_name": "Jean",
     "last_name": "Mugisha", "phone": "788123456", "country_code": "+250",
     "date_of_birth": "1995-04-12", "country": "Rwanda",
 }
@@ -200,7 +200,7 @@ def test_adding_a_child_needs_the_api_key(client, api_key, monkeypatch):
 
 def test_one_client_cannot_add_a_child_to_anothers_parent(client, api_key, monkeypatch):
     passed_parent(client, api_key, monkeypatch)
-    other = client.post("/v1/auth/register", json={**ACCOUNT, "email": "other@tuesday.africa"}).json()
+    other = client.post("/v1/auth/register", json={**ACCOUNT, "email": "other@example.com"}).json()
     bearer = {"Authorization": f"Bearer {other['access_token']}"}
     theirs = {"X-API-Key": client.post("/v1/api-keys", json={"name": "t"}, headers=bearer).json()["key"]}
     assert add_child(client, theirs).status_code == 404

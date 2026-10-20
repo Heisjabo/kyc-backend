@@ -26,12 +26,12 @@ from app.scripts.console_admin import (
 
 PASSWORD = "horse-battery"
 STAFF = {
-    "email": "Admin@Tuesday.africa",
+    "email": "Admin@example.com",
     "password": PASSWORD,
     "first_name": "Jean",
     "last_name": "Mugisha",
     "role": "owner",
-    "products": ["kyc", "sign"],
+    "products": ["kyc"],
     "phone": "788123456",
     "country_code": "+250",
     "country": "Rwanda",
@@ -100,13 +100,13 @@ def console_login(client, email=STAFF["email"], password=PASSWORD):
 
 def test_staff_sign_in_and_see_their_role_and_products(client, db_session):
     create_console_account(db_session, **STAFF)
-    response = console_login(client, email="  ADMIN@tuesday.africa ")
+    response = console_login(client, email="  ADMIN@example.com ")
     assert response.status_code == 200
     body = response.json()
     assert body["token_type"] == "bearer"
-    assert body["user"]["email"] == "admin@tuesday.africa"
+    assert body["user"]["email"] == "admin@example.com"
     assert body["user"]["role"] == "owner"
-    assert body["user"]["products"] == ["kyc", "sign"]
+    assert body["user"]["products"] == ["kyc"]
     assert body["user"]["last_login_at"] is not None
 
     me = client.get("/v1/console/auth/me", headers=auth(body["access_token"]))

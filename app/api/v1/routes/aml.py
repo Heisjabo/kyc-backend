@@ -1,7 +1,7 @@
 """AML screening results, for whoever is asking.
 
 A client gets the screenings of its own verifications that found someone or
-could not screen. Pangolin staff get those of every client and the searches
+could not screen. Staff get those of every client and the searches
 staff ran from the console, as the console shows them. Running a search is a
 console action (POST /v1/console/aml/search).
 """
@@ -20,9 +20,9 @@ router = APIRouter(prefix="/aml", tags=["aml"])
 @router.get("/results", response_model=ConsoleAmlEntryList)
 def results(
     outcome: str | None = Query(default=None, description="no_match, possible_match, strong_match or unavailable"),
-    source: str | None = Query(default=None, description="Pangolin staff only: manual or verification"),
+    source: str | None = Query(default=None, description="Staff only: manual or verification"),
     q: str | None = Query(default=None, max_length=120, description="Name, reference or email"),
-    client_id: int | None = Query(default=None, description="Pangolin staff only: one client's screenings"),
+    client_id: int | None = Query(default=None, description="Staff only: one client's screenings"),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=25, ge=1, le=100),
     caller: Caller = Depends(current_caller),

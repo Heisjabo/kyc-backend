@@ -1,7 +1,7 @@
 """Numbers over verifications, for whoever is asking.
 
 A client (signed in to the dashboard or with an API key) gets them over its own
-verifications, with a breakdown by the steps it asked for; Pangolin staff get
+verifications, with a breakdown by the steps it asked for; staff get
 them across every client, or one client's with client_id, the same figures the
 console shows. How each is worked out is in console_metrics.
 """
@@ -20,7 +20,7 @@ router = APIRouter(prefix="/metrics", tags=["metrics"])
 
 _FROM = Query(default=None, alias="from", description="First day, YYYY-MM-DD (UTC)")
 _TO = Query(default=None, description="Last day, YYYY-MM-DD (UTC), included")
-_CLIENT = Query(default=None, description="Pangolin staff only: one client's verifications")
+_CLIENT = Query(default=None, description="Staff only: one client's verifications")
 
 
 @router.get("/overview", response_model=ConsoleOverviewMetrics, response_model_by_alias=True)

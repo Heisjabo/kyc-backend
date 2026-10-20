@@ -33,7 +33,7 @@ RUN pip install --upgrade pip && pip install -r requirements.txt
 FROM python:3.11-slim
 
 # tesseract is the second MRZ reader (app/engines/ocr.py). libgl1 and libglib2.0-0
-# are what OpenCV needs to import at all, libgomp1 is TensorFlow's OpenMP runtime,
+# are what OpenCV needs to import at all, libgomp1 is the OpenMP runtime ONNX Runtime and OpenCV load,
 # and curl is the healthcheck.
 RUN apt-get update && apt-get install -y --no-install-recommends \
       tesseract-ocr \

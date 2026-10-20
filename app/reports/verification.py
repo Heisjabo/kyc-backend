@@ -47,6 +47,7 @@ from reportlab.platypus import (
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.db.models import (
     CallbackDelivery,
     DeviceSession,
@@ -65,10 +66,10 @@ from app.schemas.document import DocumentType
 from app.services import verifications as service
 from app.storage import evidence
 
-# The product the report is issued by.
-PRODUCT = "Pangolin KYC"
+# The product the report is issued by: APP_NAME, a placeholder until a name is chosen.
+PRODUCT = settings.APP_NAME
 
-# Lufga, the typeface tuesday-backend sets its statements and contract notes in.
+# Lufga, the report's typeface.
 # The TTFs live beside this module, so the report looks the same on any machine.
 _FONTS = Path(__file__).parent / "fonts"
 for _name, _file in (("Lufga", "Lufga-Regular.ttf"), ("Lufga-Medium", "Lufga-Medium.ttf"),
@@ -81,7 +82,7 @@ FONT, FONT_MEDIUM, FONT_BOLD = "Lufga", "Lufga-Medium", "Lufga-Bold"
 
 # Colours
 
-# Tuesday's brand-blue, as cdashboard's tailwind config defines it.
+# The brand blue.
 BRAND_BLUE = colors.HexColor("#1456F5")
 INK = colors.HexColor("#1F2937")
 MUTED = colors.HexColor("#6B7280")
@@ -1021,7 +1022,7 @@ class _NumberedCanvas(pdfcanvas.Canvas):
         super().save()
 
     def _shield(self, x: float, y: float, size: float):
-        """The Pangolin shield, the mark the admin console shows, drawn from its
+        """The shield mark, drawn from a
         48 by 48 SVG with (x, y) as the top left corner."""
         k = size / 48
 
@@ -1064,6 +1065,16 @@ class _NumberedCanvas(pdfcanvas.Canvas):
         fill(path(("M", 20, 30), ("C", 22.5, 31.5, 25.5, 31.5, 28, 30), ("C", 26.5, 33, 24, 36, 24, 36),
                   ("C", 24, 36, 21.5, 33, 20, 30)), colors.HexColor("#38BDF8"))
 
+    def _wordmark(self, x: float, y: float, size: float, colour, accent):
+        """The product name, its last word in the accent colour."""
+        head, _, last = PRODUCT.rpartition(" ")
+        head = head + " " if head else ""
+        self.setFont(FONT_BOLD, size)
+        self.setFillColor(colour)
+        self.drawString(x, y, head)
+        self.setFillColor(accent)
+        self.drawString(x + self.stringWidth(head, FONT_BOLD, size), y, last)
+
     def _decorate(self, total: int):
         self.setFillColor(HEADER)
         self.rect(0, PAGE_HEIGHT - 48, PAGE_WIDTH, 48, stroke=0, fill=1)
@@ -1071,9 +1082,7 @@ class _NumberedCanvas(pdfcanvas.Canvas):
         word = MARGIN + 26 + 8
         self.setFont(FONT_BOLD, 15)
         self.setFillColor(colors.white)
-        self.drawString(word, PAGE_HEIGHT - 29, "Pangolin ")
-        self.setFillColor(HEADER_BLUE)
-        self.drawString(word + self.stringWidth("Pangolin ", FONT_BOLD, 15), PAGE_HEIGHT - 29, "KYC")
+        self._wordmark(word, PAGE_HEIGHT - 29, 15, colors.white, HEADER_BLUE)
         self.setFillColor(colors.white)
         self.setFont(FONT_MEDIUM, 8)
         self.drawRightString(PAGE_WIDTH - MARGIN, PAGE_HEIGHT - 28, "Verification Proof")
@@ -1085,9 +1094,7 @@ class _NumberedCanvas(pdfcanvas.Canvas):
         word = MARGIN + 14 + 5
         self.setFont(FONT_BOLD, 9)
         self.setFillColor(INK)
-        self.drawString(word, 23, "Pangolin ")
-        self.setFillColor(BRAND_BLUE)
-        self.drawString(word + self.stringWidth("Pangolin ", FONT_BOLD, 9), 23, "KYC")
+        self._wordmark(word, 23, 9, INK, BRAND_BLUE)
         self.setFillColor(MUTED)
         self.setFont(FONT, 7)
         self.drawRightString(PAGE_WIDTH - MARGIN, 23.5, f"Page {self._pageNumber} of {total}")
@@ -1131,6 +1138,6 @@ def build(db: Session, verification: Verification) -> bytes:
 
 
 def filename(verification: Verification) -> str:
-    """The same name tuesday-backend gives the Shufti proof it serves."""
+    """verification_<reference>.pdf, with anything unsafe in a filename replaced."""
     safe = re.sub(r"[^A-Za-z0-9._-]", "_", verification.reference)
     return f"verification_{safe}.pdf"

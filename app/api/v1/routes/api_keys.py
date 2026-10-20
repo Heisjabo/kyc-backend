@@ -91,7 +91,7 @@ def create_key(
 def list_keys(
     q: str | None = Query(default=None, max_length=120, description="Key name or prefix"),
     state: str | None = Query(default=None, description="active, expiring, suspended, expired or revoked"),
-    client_id: int | None = Query(default=None, description="Pangolin staff only: one client's keys"),
+    client_id: int | None = Query(default=None, description="Staff only: one client's keys"),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=25, ge=1, le=100),
     caller: Caller = Depends(current_caller),
@@ -99,7 +99,7 @@ def list_keys(
 ) -> ConsoleApiKeyList:
     """Keys newest first, including the spent ones, with a count per state. A
     client gets its own, so it can see what exists and what each has been doing;
-    Pangolin staff get every client's."""
+    Staff get every client's."""
     keys = api_key_list(
         db,
         q=q,
@@ -112,8 +112,8 @@ def list_keys(
     if not caller.staff:
         for row in keys.items:
             if row.last_action is not None:
-                # Pangolin suspended or resumed it; which staff member did is not the client's.
-                row.last_action.by = "Pangolin compliance"
+                # Staff suspended or resumed it; which staff member did is not the client's.
+                row.last_action.by = "Compliance team"
     return keys
 
 

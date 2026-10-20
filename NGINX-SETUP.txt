@@ -1,18 +1,18 @@
 nginx for the KYC platform
 ==========================
 
-Two hostnames on srv1022241 (45.9.188.3):
+Two hostnames on the server (203.0.113.10 stands for its address):
 
-  pangolinkyc-api.tuesday.africa  ->  127.0.0.1:4500   the API, running now
-  pangolinkyc.tuesday.africa      ->  127.0.0.1:4501   the journey, not deployed yet
+  kyc-api.example.com  ->  127.0.0.1:4500   the API, running now
+  kyc.example.com      ->  127.0.0.1:4501   the journey, not deployed yet
 
 4501 is free: taken on that machine are 3000, 3001, 3030, 4000, 4001, 4002, 4500,
 5000, 5001, 7000, 9000, 10000.
 
 DNS, both as A records:
 
-  pangolinkyc-api   A   45.9.188.3
-  pangolinkyc       A   45.9.188.3
+  kyc-api   A   203.0.113.10
+  kyc       A   203.0.113.10
 
 Grey cloud (DNS only) in Cloudflare while certbot runs, or the HTTP-01 challenge
 fights the proxy.
@@ -21,7 +21,7 @@ No TLS lines below: certbot --nginx adds the 443 listener, the certificate paths
 the redirect itself.
 
 
-/etc/nginx/sites-available/pangolinkyc-api
+/etc/nginx/sites-available/kyc-platform-api
 ------------------------------------------
 
 # Outside any server block (the top of the file, or a file in /etc/nginx/conf.d/): one
@@ -34,7 +34,7 @@ limit_req_zone $binary_remote_addr zone=kyc_api:10m rate=20r/s;
 server {
     listen 80;
     listen [::]:80;
-    server_name pangolinkyc-api.tuesday.africa;
+    server_name kyc-api.example.com;
 
     # Documents and PDFs are capped at 10 MB by the service. nginx defaults to 1 MB,
     # so without this every upload is refused with a 413 that never reaches the app
@@ -63,7 +63,7 @@ server {
         proxy_set_header X-Real-IP         $remote_addr;
         proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
         # Load-bearing. uvicorn runs with --proxy-headers, and this is what makes the
-        # service build https://pangolinkyc-api.tuesday.africa/verify/... instead of
+        # service build https://kyc-api.example.com/verify/... instead of
         # http:// with the container's own hostname. Every session link and QR
         # depends on it.
         proxy_set_header X-Forwarded-Proto $scheme;
@@ -78,13 +78,13 @@ server {
 }
 
 
-/etc/nginx/sites-available/pangolinkyc
+/etc/nginx/sites-available/kyc-platform
 --------------------------------------
 
 server {
     listen 80;
     listen [::]:80;
-    server_name pangolinkyc.tuesday.africa;
+    server_name kyc.example.com;
 
     # The journey uploads a document and a proof of address.
     client_max_body_size 12M;
@@ -118,15 +118,15 @@ server {
 Commands, in order
 ------------------
 
-ln -sf /etc/nginx/sites-available/pangolinkyc-api /etc/nginx/sites-enabled/pangolinkyc-api
+ln -sf /etc/nginx/sites-available/kyc-platform-api /etc/nginx/sites-enabled/kyc-platform-api
 
-ln -sf /etc/nginx/sites-available/pangolinkyc /etc/nginx/sites-enabled/pangolinkyc
+ln -sf /etc/nginx/sites-available/kyc-platform /etc/nginx/sites-enabled/kyc-platform
 
 nginx -t && systemctl reload nginx
 
-certbot --nginx -d pangolinkyc-api.tuesday.africa -d pangolinkyc.tuesday.africa
+certbot --nginx -d kyc-api.example.com -d kyc.example.com
 
-curl -s https://pangolinkyc-api.tuesday.africa/v1/health
+curl -s https://kyc-api.example.com/v1/health
 
 
 Notes
@@ -136,9 +136,9 @@ Notes
   4501 yet, so one run covers both names and the frontend's certificate is waiting.
   That hostname returns 502 until a container is there, which is expected.
 - If this nginx uses conf.d rather than sites-available, write the two blocks to
-  /etc/nginx/conf.d/pangolinkyc-api.conf and /etc/nginx/conf.d/pangolinkyc.conf and
+  /etc/nginx/conf.d/kyc-platform-api.conf and /etc/nginx/conf.d/kyc-platform.conf and
   skip the two ln lines.
-- Once the journey is on pangolinkyc.tuesday.africa calling the API on the other
+- Once the journey is on kyc.example.com calling the API on the other
   hostname, the browser will block it until CORS is added to app/main.py, and
   session_url needs VERIFY_BASE_URL so links point at the journey rather than the
   API. Neither is nginx's job.

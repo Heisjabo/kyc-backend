@@ -26,13 +26,18 @@ from tests.test_console_verifications import (  # noqa: F401 (fixtures)
 
 pytestmark = pytest.mark.skipif(not _reachable(), reason="needs the local Postgres")
 
-SIGN_SECRET = "sign-server-secret-for-tests"
 
 
 @pytest.fixture()
 def key(client):
     header, _ = client_key(client, "billing@example.com", "Billing")
     return header
+
+
+@pytest.fixture(autouse=True)
+def _not_enforced_unless_a_test_asks(monkeypatch):
+    """Billing starts off, whatever the local .env says; the enforced fixture turns it on."""
+    monkeypatch.setattr(settings, "BILLING_ENFORCED", False)
 
 
 @pytest.fixture()
@@ -70,13 +75,12 @@ def decide(db_session, reference, account, status=StepStatus.passed) -> Verifica
 # The free allowance
 
 
-def test_a_new_account_starts_free_with_100_kyc_and_100_sign(client, key):
+def test_a_new_account_starts_free_with_100_kyc(client, key):
     body = client.get("/v1/billing", headers=key).json()
     assert body["plan"] == "free"
     assert body["balances"]["kyc"]["remaining"] == 100
-    assert body["balances"]["sign"]["remaining"] == 100
     assert body["unit_price_cents"] == 100
-    assert "aml" not in body["features"] and "e_signature" in body["features"]
+    assert "aml" not in body["features"] and "document" in body["features"]
 
 
 def test_the_free_allowance_is_given_once(client, key, db_session):
@@ -85,7 +89,7 @@ def test_the_free_allowance_is_given_once(client, key, db_session):
     account = account_of(db_session)
     billing.ensure_free_grants(db_session, account.id)
     grants = db_session.scalars(select(CreditGrant).where(CreditGrant.account_id == account.id)).all()
-    assert sorted(g.product for g in grants) == ["kyc", "sign"]
+    assert [g.product for g in grants] == ["kyc"]
 
 
 # Reserve, commit, release
@@ -234,57 +238,6 @@ def test_paid_plan_gets_aml_added(client, key, db_session, enforced):
 def test_nothing_is_refused_by_plan_while_not_enforced(client, key):
     body = open_one(client, key, services=["document", "face"]).json()
     assert [step["step"] for step in body["steps"]] == ["document", "face", "aml"]
-
-
-# Sign, from the Sign server
-
-
-@pytest.fixture()
-def sign_secret(monkeypatch):
-    monkeypatch.setattr(settings, "SIGN_BILLING_SECRET", SIGN_SECRET)
-    return {"X-Billing-Secret": SIGN_SECRET}
-
-
-def test_sign_endpoints_are_off_without_a_secret(client, key, db_session):
-    account = account_of(db_session)
-    response = client.post("/v1/billing/sign/reserve", json={"account_id": account.id, "request_id": "doc-1"})
-    assert response.status_code == 404
-
-
-def test_sign_endpoints_refuse_a_wrong_secret(client, key, db_session, sign_secret):
-    account = account_of(db_session)
-    response = client.post(
-        "/v1/billing/sign/reserve",
-        json={"account_id": account.id, "request_id": "doc-1"},
-        headers={"X-Billing-Secret": "wrong"},
-    )
-    assert response.status_code == 401
-
-
-def test_a_client_key_cannot_spend_or_refund_sign_units(client, key, db_session, sign_secret):
-    account = account_of(db_session)
-    response = client.post("/v1/billing/sign/release", json={"account_id": account.id, "request_id": "doc-1"}, headers=key)
-    assert response.status_code == 401
-
-
-def test_a_sign_request_is_reserved_then_charged(client, key, db_session, sign_secret):
-    account = account_of(db_session)
-    body = {"account_id": account.id, "request_id": "doc-1"}
-    assert client.post("/v1/billing/sign/reserve", json=body, headers=sign_secret).json()["kind"] == "reserve"
-    assert client.post("/v1/billing/sign/reserve", json=body, headers=sign_secret).status_code == 200
-    assert client.post("/v1/billing/sign/commit", json=body, headers=sign_secret).json()["kind"] == "commit"
-    assert client.post("/v1/billing/sign/release", json=body, headers=sign_secret).status_code == 409
-    sign = client.get("/v1/billing", headers=key).json()["balances"]["sign"]
-    assert sign == {"remaining": 99, "in_progress": 0, "used_total": 1, "used_this_month": 1}
-
-
-def test_a_cancelled_sign_request_gives_its_unit_back(client, key, db_session, sign_secret):
-    account = account_of(db_session)
-    body = {"account_id": account.id, "request_id": "doc-2"}
-    client.post("/v1/billing/sign/reserve", json=body, headers=sign_secret)
-    assert client.post("/v1/billing/sign/release", json=body, headers=sign_secret).json()["kind"] == "release"
-    assert client.post("/v1/billing/sign/commit", json=body, headers=sign_secret).status_code == 409
-    assert client.get("/v1/billing", headers=key).json()["balances"]["sign"]["remaining"] == 100
 
 
 # Usage history

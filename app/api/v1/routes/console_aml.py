@@ -1,4 +1,4 @@
-"""AML screening for Pangolin staff in the admin console.
+"""AML screening for staff in the admin console.
 
 - **Searching.** Staff look a person up on the watchlists by hand, by name and
   optionally date of birth, nationality and ID number. It is the same yente
@@ -14,7 +14,7 @@
   in English (app/screening/english.py).
 
 Searching is an action on a person, so readonly and support staff may not run
-one; anyone with Pangolin KYC may read the list.
+one; anyone with KYC may read the list.
 """
 
 import time
@@ -292,7 +292,7 @@ def aml_results(
 ) -> ConsoleAmlEntryList:
     """The AML list. For one client account (the client dashboard) it holds only
     the screenings of that account's own verifications: staff searches are
-    Pangolin's, not the client's."""
+    the platform's, not the client's."""
     if account_id is not None:
         source = "verification"
     if source is not None and source not in SOURCES:

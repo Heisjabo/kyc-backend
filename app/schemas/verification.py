@@ -251,7 +251,7 @@ class VerificationDetailResponse(VerificationResponse):
     document: ConsoleDocument | None
     files: list[str]
     evidence: list[ConsoleFile]
-    # Decisions Pangolin's compliance team made on it, oldest first.
+    # Decisions the compliance team made on it, oldest first.
     reviews: list[ConsoleReviewEvent] = []
 
 

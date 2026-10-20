@@ -144,7 +144,7 @@ def test_a_passed_verification_shows_every_section(client, api_key, db_session, 
         "Facial Biometrics Verification", "Document Verification", "AML Screening",
         "MRZ Data Breakdown", "PC1234567", "1995-04-12 (Matched)", "2030-01-01",
         "Verification Settings", "Callback Details", "verification.accepted", "200",
-        "Face Match Score:", "0.7600", "pass at 0.40 or above", "Pangolin KYC", "Document Front Side", "Face",
+        "Face Match Score:", "0.7600", "pass at 0.40 or above", "KYC Platform", "Document Front Side", "Face",
         "Device and Network Intelligence", "Kigali", "Android 14", "Chrome 140.0.0.0",
     ):
         assert expected in text, expected
@@ -153,7 +153,7 @@ def test_a_passed_verification_shows_every_section(client, api_key, db_session, 
 def test_another_clients_reference_is_not_found(client, api_key):
     body = open_verification(client, api_key)
     other = client.post("/v1/auth/register", json={
-        "email": "other@tuesday.africa", "password": "horse-battery", "first_name": "O", "last_name": "C",
+        "email": "other@example.com", "password": "horse-battery", "first_name": "O", "last_name": "C",
         "phone": "788000111", "country_code": "+250", "date_of_birth": "1990-01-01", "country": "Rwanda",
     }).json()
     other_key = client.post("/v1/api-keys", json={"name": "t"},

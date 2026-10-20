@@ -1,12 +1,12 @@
 """Thresholds and vocabulary for the address check. Tune against real samples."""
 
-# What counts as a proof of address, matching the supported_types we send Shufti
-# (tuesday-backend/src/shufti/shufti.service.ts). A driving licence is not offered
+# What counts as a proof of address, matching Shufti's address supported_types.
+# A driving licence is not offered
 # unless the client asks for it in address_types: only a few countries print an
 # address on one.
 PROOF_TYPES = ("utility_bill", "bank_statement", "credit_card_statement", "rent_agreement")
 
-# How recent the proof has to be, in days. Shufti is sent document_validity: 90,
+# How recent the proof has to be, in days. The same as Shufti's document_validity: 90,
 # so a client moving between us and them sees the same answer.
 MAX_PROOF_AGE_DAYS = 90
 
@@ -56,6 +56,6 @@ PDF_RENDER_SCALE = 2.8
 # something else, or a photograph too poor to read.
 MIN_TEXT_LINES = 5
 
-# A PO box is not an address anybody lives at. Our Shufti request says
-# po_box: false, so this refuses the same thing.
+# A PO box is not an address anybody lives at, the same as Shufti's
+# po_box: false, so this refuses it.
 PO_BOX_WORDS = ("po box", "p o box", "p.o box", "p.o. box", "post office box", "postbox")

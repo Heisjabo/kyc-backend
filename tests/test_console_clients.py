@@ -18,6 +18,7 @@ from tests.test_console_verifications import (  # noqa: F401 (fixtures)
     db_session,
     open_verification,
     staff_token,
+    without_products,
 )
 
 pytestmark = pytest.mark.skipif(not _reachable(), reason="needs the local Postgres")
@@ -103,6 +104,19 @@ def test_filters(client, db_session, clients):
     assert client.get("/v1/console/clients", params={"last_sign_in": "year"}, headers=auth(token)).status_code == 422
 
 
+def test_filter_by_plan(client, db_session, clients):
+    token = staff_token(client, db_session)
+    beta = db_session.scalar(select(Account).where(Account.email == "ops@beta.example.com"))
+    beta.plan = "payg"
+    db_session.commit()
+
+    body = listing(client, token, plan="payg")
+    assert [c["email"] for c in body["items"]] == ["ops@beta.example.com"]
+    assert body["items"][0]["plan"] == "payg"
+    assert "ops@beta.example.com" not in [c["email"] for c in listing(client, token, plan="free")["items"]]
+    assert client.get("/v1/console/clients", params={"plan": "gold"}, headers=auth(token)).status_code == 422
+
+
 def test_pages(client, db_session, clients):
     token = staff_token(client, db_session)
     first = listing(client, token, page=1, page_size=1)
@@ -145,6 +159,7 @@ def test_clients_need_a_console_token_with_kyc(client, db_session, clients):
     _, dashboard_token = client_key(client, "ops@gamma.example.com", "Gamma")
     assert client.get("/v1/console/clients", headers=auth(dashboard_token)).status_code == 401
     assert client.get("/v1/console/clients").status_code == 401
-    sign_only = staff_token(client, db_session, email="sign@example.com", products=("sign",))
-    assert client.get("/v1/console/clients", headers=auth(sign_only)).status_code == 403
-    assert client.get("/v1/console/clients/options", headers=auth(sign_only)).status_code == 403
+    no_kyc = staff_token(client, db_session, email="noproducts@example.com")
+    without_products(db_session, "noproducts@example.com")
+    assert client.get("/v1/console/clients", headers=auth(no_kyc)).status_code == 403
+    assert client.get("/v1/console/clients/options", headers=auth(no_kyc)).status_code == 403

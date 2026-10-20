@@ -4,7 +4,9 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
-    APP_NAME: str = "Tuesday KYC Platform"
+    # The product's name, a placeholder until one is chosen. The API docs and the
+    # verification report both print it.
+    APP_NAME: str = "KYC Platform"
     APP_VERSION: str = "0.1.0"
     ENVIRONMENT: str = "development"
     # Interactive API docs. Left unset they are on in development and off everywhere else;
@@ -89,8 +91,8 @@ class Settings(BaseSettings):
     # encouragement, and it is a setting so it can be lowered without a release.
     MAX_SESSION_TTL_MINUTES: int = 60 * 24 * 30
 
-    # Evidence lives in Google Drive, reached with a service account key, the way
-    # our database backups do. Its two interesting fields:
+    # Evidence lives in Google Drive, reached with a service account key.
+    # Its two interesting fields:
     GOOGLE_SERVICE_ACCOUNT_EMAIL: str = ""
     GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY: str = ""
     # Or the whole key file, if a deployment would rather mount one.
@@ -121,8 +123,8 @@ class Settings(BaseSettings):
     NETWORK_DATA_DIR: str = "var/network"
     NETWORK_DATA_DOWNLOAD: bool = True
 
-    # Pangolin AML runs after the identity checks. The token is backend-only.
-    YENTE_BASE_URL: str = "https://aml.tuesday.africa"
+    # AML screening runs after the identity checks. The token is backend-only.
+    YENTE_BASE_URL: str = "http://localhost:8080"
     YENTE_API_TOKEN: str = ""
     YENTE_SCREENING_DATASET: str = "sanctions"
     YENTE_POSSIBLE_THRESHOLD: float = 0.7
@@ -159,7 +161,7 @@ class Settings(BaseSettings):
     SMTP_USER: str = ""
     SMTP_PASSWORD: str = ""
     SMTP_STARTTLS: bool = True
-    EMAIL_FROM: str = "Tuesday KYC <no-reply@tuesday.africa>"
+    EMAIL_FROM: str = "KYC Platform <no-reply@example.com>"
 
     # Limits on one account.
     MAX_API_KEYS_PER_ACCOUNT: int = 10
@@ -171,9 +173,6 @@ class Settings(BaseSettings):
     # live are not cut off the day billing ships; turn it on once every
     # existing client is on the plan they should be.
     BILLING_ENFORCED: bool = False
-    # Shared with the Pangolin Sign server, which presents it to reserve and
-    # settle Sign requests (/v1/billing/sign/*). Empty turns those endpoints off.
-    SIGN_BILLING_SECRET: str = ""
     # The longest side of an uploaded image or PDF page, in pixels, checked before it is decoded.
     MAX_IMAGE_SIDE_PX: int = 8000
     MAX_IMAGE_PIXELS: int = 40_000_000

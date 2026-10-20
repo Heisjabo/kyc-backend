@@ -1,4 +1,4 @@
-"""The audit log, for Pangolin staff in the admin console.
+"""The audit log, for staff in the admin console.
 
 Everything recorded in audit_events, newest first: console sign-ins, AML
 searches, review decisions, API key controls, due diligence form changes and
@@ -70,7 +70,7 @@ def audit_events(
     """The audit log, whole or for one client account (the client dashboard's API
     logs). For an account that is what the account did itself, signed in to the
     dashboard or with one of its API keys, and what happened on its own
-    verifications, without anything Pangolin staff did there except their review
+    verifications, without anything staff did there except their review
     decisions, and without saying which staff member it was."""
     filters = []
     if account_id is not None:
@@ -121,14 +121,14 @@ def audit_events(
 
     def shown(e: AuditEvent) -> ConsoleAuditEvent:
         if account_id is not None and e.actor.isdigit() and e.actor != str(account_id):
-            # A review decision by Pangolin staff, on the client's verification: what was
+            # A review decision by staff, on the client's verification: what was
             # decided is the client's to see, which staff member decided it is not.
             payload = {k: v for k, v in e.payload.items() if k not in ("by", "ip", "user_agent")}
             return ConsoleAuditEvent(
                 id=str(e.id),
                 event_type=e.event_type,
-                actor="pangolin",
-                actor_name="Pangolin compliance",
+                actor="compliance",
+                actor_name="Compliance team",
                 actor_email=None,
                 verification_id=str(e.verification_id) if e.verification_id else None,
                 verification_reference=references.get(e.verification_id),

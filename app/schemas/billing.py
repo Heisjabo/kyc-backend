@@ -7,13 +7,13 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 Plan = Literal["free", "payg", "enterprise"]
-Product = Literal["kyc", "sign"]
+Product = Literal["kyc"]
 
 
 class ProductBalance(BaseModel):
     # Units the account can still spend.
     remaining: int
-    # Units held by verifications or Sign requests that are still open.
+    # Units held by verifications that are still open.
     in_progress: int
     used_total: int
     used_this_month: int
@@ -34,7 +34,7 @@ class BillingResponse(BaseModel):
 class UsageItem(BaseModel):
     product: str
     kind: str
-    # The verification's reference, or the Sign request's id.
+    # The verification's reference.
     subject: str | None
     unit_price_cents: int
     created_at: datetime
@@ -45,18 +45,6 @@ class UsageList(BaseModel):
     total: int
     page: int
     page_size: int
-
-
-class SignUsageRequest(BaseModel):
-    account_id: int
-    # The Sign server's own id for the request.
-    request_id: str = Field(min_length=1, max_length=128)
-
-
-class SignUsageResponse(BaseModel):
-    kind: str
-    grant_id: int | None
-    unit_price_cents: int
 
 
 class PlanUpdate(BaseModel):

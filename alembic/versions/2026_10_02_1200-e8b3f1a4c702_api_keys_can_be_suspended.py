@@ -4,7 +4,7 @@ Revision ID: e8b3f1a4c702
 Revises: c7d2e5a9b310
 Create Date: 2026-10-02
 
-Pangolin staff can suspend a client's API key from the admin console: the key
+Staff can suspend a client's API key from the admin console: the key
 stops working until it is resumed. suspended_at holds when, and is null for a
 key that is not suspended.
 

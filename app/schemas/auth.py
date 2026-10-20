@@ -20,8 +20,8 @@ NewPassword = Annotated[str, AfterValidator(passwords.check)]
 class RegisterRequest(BaseModel):
     """What someone gives to open an account.
 
-    The same details tuesday-backend asks for at signup, without its trading
-    fields (role, amount, stock), its entity representatives, or ethnicity.
+    Contact and identity details only: no trading fields, entity
+    representatives, or ethnicity.
     """
 
     email: EmailStr
@@ -103,7 +103,7 @@ class ApiKeyResponse(BaseModel):
     created_at: datetime
     last_used_at: datetime | None
     revoked_at: datetime | None
-    # Set while Pangolin has suspended the key; it does not work until resumed.
+    # Set while staff have suspended the key; it does not work until resumed.
     suspended_at: datetime | None = None
     # Set once the owner deleted it.
     deleted_at: datetime | None = None

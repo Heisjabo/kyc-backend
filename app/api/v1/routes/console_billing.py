@@ -1,6 +1,6 @@
-"""A client's plan and credit, for Pangolin staff in the admin console.
+"""A client's plan and credit, for staff in the admin console.
 
-Anyone with Pangolin KYC in their console products can read it. Changing a plan
+Anyone with KYC in their console products can read it. Changing a plan
 or giving credit is for owners and admins, and both are kept in audit_events
 (billing.plan_changed, billing.credit_granted), the way account changes are.
 """

@@ -1,6 +1,6 @@
 """The shared read endpoints, scoped by who is asking: a client, signed in to the
 dashboard or with an API key, sees its own account's data and nothing of any
-other account's; Pangolin staff, signed in to the console, see every client's.
+other account's; staff, signed in to the console, see every client's.
 
 Against Postgres in a throwaway schema, like the other API tests, and skipped
 when it is not reachable.
@@ -79,7 +79,7 @@ def account(client, email: str, first_name: str) -> tuple[dict, str]:
     return {"X-API-Key": key}, token
 
 
-def staff(client, db_session, role="admin", email="staff@pangolin.example.com") -> str:
+def staff(client, db_session, role="admin", email="staff@console.example.com") -> str:
     create_console_account(
         db_session,
         email=email,
@@ -267,7 +267,7 @@ def test_api_logs_hold_the_clients_own_events_and_hide_staff(client, db_session,
             event_type="review.approved",
             actor="999",
             verification_id=acme_verification.id,
-            payload={"by": "reviewer@pangolin.example.com", "note": "Looks right"},
+            payload={"by": "reviewer@console.example.com", "note": "Looks right"},
         )
     )
     db_session.add(AuditEvent(event_type="aml.search", actor="999", payload={"query": {"full_name": "Someone"}}))
@@ -278,7 +278,7 @@ def test_api_logs_hold_the_clients_own_events_and_hide_staff(client, db_session,
     assert "api_key.created" in types
     assert "aml.search" not in types
     review = next(e for e in events if e["event_type"] == "review.approved")
-    assert review["actor_name"] == "Pangolin compliance"
+    assert review["actor_name"] == "Compliance team"
     assert review["verification_reference"] == two_accounts["acme_first"]["reference"]
     assert "by" not in review["payload"]
 
@@ -288,7 +288,7 @@ def test_api_logs_hold_the_clients_own_events_and_hide_staff(client, db_session,
 
     # The whole log is for console owners and admins only.
     assert client.get("/v1/audit-events", headers=auth(staff(client, db_session, role="reviewer"))).status_code == 403
-    admin = staff(client, db_session, email="admin@pangolin.example.com")
+    admin = staff(client, db_session, email="admin@console.example.com")
     assert "aml.search" in [e["event_type"] for e in get(client, auth(admin), "/audit-events")["items"]]
 
 

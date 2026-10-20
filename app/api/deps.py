@@ -6,7 +6,7 @@ Three ways in, for three different callers:
     `current_account` turns it into their account.
   * **A system calling the API** presents an API key belonging to an account.
     `account_from_api_key` turns it into the same thing.
-  * **Pangolin staff in the admin console** present a console token.
+  * **Staff in the admin console** present a console token.
     `current_console_account` turns it into their account, and only if it
     still has a console role.
 
@@ -14,8 +14,8 @@ All three end at an Account, so anything they reach can be written the same way.
 
 Endpoints that every caller shares take `current_caller`, which accepts any of
 the three and says how far the caller may see: a client, through the dashboard
-or an API key, sees only its own account's data; Pangolin staff with Pangolin
-KYC in their console products see every account's.
+or an API key, sees only its own account's data; staff with KYC in
+their console products see every account's.
 """
 
 from dataclasses import dataclass
@@ -198,7 +198,7 @@ class Caller:
 
     @property
     def scope(self) -> int | None:
-        """The one account whose data this caller may see, or None for Pangolin
+        """The one account whose data this caller may see, or None for
         staff, who see every account's."""
         return None if self.staff else self.account.id
 
@@ -214,7 +214,7 @@ def current_caller(
     x_api_key: str | None = Header(default=None, alias=_API_KEY_HEADER),
     db: Session = Depends(get_session),
 ) -> Caller:
-    """A client signed in to the dashboard, a client's API key, or Pangolin staff
+    """A client signed in to the dashboard, a client's API key, or staff
     signed in to the console. A bearer token is tried as a console token first:
     the two kinds of token are signed apart, so neither passes for the other."""
     if credentials is not None:

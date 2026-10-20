@@ -181,10 +181,10 @@ def test_dotenv_settings_are_used_for_private_service(monkeypatch):
     from app.core.config import settings
     monkeypatch.delenv('YENTE_BASE_URL',raising=False)
     monkeypatch.delenv('YENTE_API_TOKEN',raising=False)
-    monkeypatch.setattr(settings,'YENTE_BASE_URL','https://aml.tuesday.africa')
+    monkeypatch.setattr(settings,'YENTE_BASE_URL','https://aml.example.com')
     monkeypatch.setattr(settings,'YENTE_API_TOKEN','dotenv-test-token')
     def handle(request):
-        assert str(request.url).startswith('https://aml.tuesday.africa/match/sanctions')
+        assert str(request.url).startswith('https://aml.example.com/match/sanctions')
         assert request.headers['Authorization']=='Bearer dotenv-test-token'
         return httpx.Response(200,json={'responses':{'identity':{'status':200,'results':[],
             'total':{'value':0,'relation':'eq'}}}})

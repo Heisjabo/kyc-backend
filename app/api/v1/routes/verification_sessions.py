@@ -202,10 +202,10 @@ def create_verification(
 
 
 # Who reads a verification by reference: the client it belongs to (its API key or
-# its dashboard session), or Pangolin staff naming the client, since a reference
+# its dashboard session), or staff naming the client, since a reference
 # is only unique within one client.
-_CLIENT_ID = Query(default=None, description="Pangolin staff only: the client the reference belongs to")
-PANGOLIN = "Pangolin compliance"
+_CLIENT_ID = Query(default=None, description="Staff only: the client the reference belongs to")
+COMPLIANCE = "Compliance team"
 
 
 def _find(db: Session, caller: Caller, reference: str, client_id: int | None) -> Verification:
@@ -224,14 +224,14 @@ def list_verifications(
     q: str | None = Query(default=None, max_length=120, description="Reference, applicant name, email or customer id"),
     created_from: date | None = Query(default=None, description="Created on or after this day (UTC)"),
     created_to: date | None = Query(default=None, description="Created on or before this day (UTC)"),
-    client_id: int | None = Query(default=None, description="Pangolin staff only: one client's verifications"),
+    client_id: int | None = Query(default=None, description="Staff only: one client's verifications"),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=25, ge=1, le=100),
     caller: Caller = Depends(current_caller),
     db: Session = Depends(get_session),
 ) -> ConsoleVerificationList:
     """Verifications newest first, with a count per status. A client gets its own;
-    Pangolin staff get every client's."""
+    Staff get every client's."""
     return views.verification_list(
         db,
         status_=status_,
@@ -262,7 +262,7 @@ def read_verification(
     if not caller.staff:
         # What was decided is the client's to see; which staff member decided it is not.
         for review in reviews:
-            review.by = PANGOLIN
+            review.by = COMPLIANCE
     return VerificationDetailResponse(
         **base.model_dump(exclude={"steps"}),
         id=full.id,

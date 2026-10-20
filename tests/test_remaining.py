@@ -39,7 +39,7 @@ def test_the_session_view_says_when_the_link_expires(client, api_key):
     assert view["expires_at"] is not None
 
 
-# The ceiling stays at 30 days: clients (the Tuesday app sends ttl_days=20) rely on it.
+# The ceiling stays at 30 days: clients that send ttl_days=20 rely on it.
 
 def test_a_link_can_still_be_asked_to_last_twenty_days(client, api_key):
     response = client.post("/v1/verifications", json={"services": ["document"], "ttl_days": 20, "applicant": {}}, headers=api_key)
@@ -70,7 +70,7 @@ def test_an_image_with_one_very_long_side_is_refused(monkeypatch):
 
 # M7: quotas
 
-def _bearer(client, email="new@tuesday.africa"):
+def _bearer(client, email="new@example.com"):
     token = client.post("/v1/auth/register", json={**ACCOUNT, "email": email}).json()["access_token"]
     return {"Authorization": f"Bearer {token}"}
 
@@ -106,8 +106,8 @@ def test_a_reset_is_sent_by_smtp_when_it_is_configured(monkeypatch):
     monkeypatch.setattr(smtplib, "SMTP", FakeSMTP)
     for name, value in {"EMAIL_ENABLED": True, "SMTP_HOST": "smtp.test", "SMTP_USER": "u", "SMTP_PASSWORD": "p"}.items():
         monkeypatch.setattr(settings, name, value)
-    assert email_service.send_password_reset("jean@tuesday.africa", "TOKEN123") is True
-    assert sent["to"] == "jean@tuesday.africa" and "TOKEN123" in sent["body"] and sent["tls"] and sent["login"] == "u"
+    assert email_service.send_password_reset("jean@example.com", "TOKEN123") is True
+    assert sent["to"] == "jean@example.com" and "TOKEN123" in sent["body"] and sent["tls"] and sent["login"] == "u"
 
 
 def test_a_failed_send_reports_false_and_does_not_raise(monkeypatch):

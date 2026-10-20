@@ -2,8 +2,8 @@
 
 A client gets its API logs: what it did itself, signed in to the dashboard or
 with one of its API keys, and what happened on its own verifications, where
-Pangolin staff appear only as "Pangolin compliance" making review decisions.
-Pangolin staff get the whole log, as the console shows it, and only owners and
+Staff appear only as "Compliance team" making review decisions.
+Staff get the whole log, as the console shows it, and only owners and
 admins, since it holds the names people searched for and where staff signed in
 from.
 """
@@ -24,7 +24,7 @@ router = APIRouter(prefix="/audit-events", tags=["audit"])
 @router.get("", response_model=ConsoleAuditEventList)
 def list_events(
     category: str | None = Query(default=None, max_length=40, description="request, api_key, review, dashboard and so on"),
-    actor: str | None = Query(default=None, max_length=40, description="Pangolin staff only: one account id, or system"),
+    actor: str | None = Query(default=None, max_length=40, description="Staff only: one account id, or system"),
     q: str | None = Query(default=None, max_length=120, description="Text anywhere in the event type or its details"),
     created_from: date | None = Query(default=None, description="On or after this day (UTC)"),
     created_to: date | None = Query(default=None, description="On or before this day (UTC)"),

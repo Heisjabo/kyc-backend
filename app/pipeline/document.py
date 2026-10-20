@@ -384,7 +384,7 @@ def _validity_check(
 
 
 def _country_check(requested: str, extracted: ExtractedFields) -> CheckResult:
-    # Callers may send "RW" (our backend's format), "RWA" or "Rwanda".
+    # Callers may send "RW", "RWA" or "Rwanda".
     expected = to_alpha3(requested)
     found = extracted.issuing_country
     if expected is None:

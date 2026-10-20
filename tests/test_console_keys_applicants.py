@@ -18,6 +18,7 @@ from tests.test_console_verifications import (  # noqa: F401 (fixtures)
     db_session,
     open_verification,
     staff_token,
+    without_products,
 )
 
 pytestmark = pytest.mark.skipif(not _reachable(), reason="needs the local Postgres")
@@ -140,8 +141,9 @@ def test_applicant_detail_has_every_verification_newest_first(client, db_session
 
 def test_keys_and_applicants_need_a_console_token_with_kyc(client, db_session, setup):
     _, dashboard_token = client_key(client, "ops@gamma.example.com", "Gamma")
-    sign_only = staff_token(client, db_session, email="sign@example.com", products=("sign",))
+    no_kyc = staff_token(client, db_session, email="noproducts@example.com")
+    without_products(db_session, "noproducts@example.com")
     for path in ("/v1/console/api-keys", "/v1/console/applicants", "/v1/console/applicants/1"):
         assert client.get(path).status_code == 401
         assert client.get(path, headers=auth(dashboard_token)).status_code == 401
-        assert client.get(path, headers=auth(sign_only)).status_code == 403
+        assert client.get(path, headers=auth(no_kyc)).status_code == 403

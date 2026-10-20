@@ -1,9 +1,9 @@
-"""Every verification, for Pangolin staff in the admin console.
+"""Every verification, for staff in the admin console.
 
 The client API shows a client its own verifications by reference. Staff need all
 of them, across every client, so these endpoints are keyed by id (a reference is
 only unique within one client) and open to console accounts with access to
-Pangolin KYC.
+KYC.
 
 A session whose link has run out is reported as expired even before anyone has
 looked at it, by working the status out in the query rather than waiting for the

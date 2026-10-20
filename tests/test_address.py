@@ -32,7 +32,7 @@ from app.schemas.address import ProofType
 from app.schemas.document import CheckResult, CheckStatus, Decision, DocumentCheckResponse, ExtractedFields
 
 ACCOUNT = {
-    "email": "address@tuesday.africa", "password": "horse-battery", "first_name": "Jean",
+    "email": "address@example.com", "password": "horse-battery", "first_name": "Jean",
     "last_name": "Mugisha", "phone": "788123456", "country_code": "+250",
     "date_of_birth": "1995-04-12", "country": "Rwanda",
 }

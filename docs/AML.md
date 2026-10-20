@@ -1,7 +1,7 @@
 # AML as the final KYC step
 
-Pangolin AML is running separately at **https://aml.tuesday.africa**.
-Its Swagger is https://aml.tuesday.africa/docs. The KYC backend calls it itself;
+The AML service (Yente) runs as a separate service, at whatever `YENTE_BASE_URL` points to.
+Its Swagger is at `<YENTE_BASE_URL>/docs`. The KYC backend calls it itself;
 the applicant's browser never receives the AML service token.
 
 ## The flow to explain to Jabo
@@ -9,7 +9,7 @@ the applicant's browser never receives the AML service token.
 1. The client opens a verification with `POST /v1/verifications` and its `X-API-Key`.
 2. The person scans their document. The backend validates it and saves the extracted identity.
 3. The person completes the selfie/liveness check. The backend checks liveness and compares their face with the document portrait.
-4. After those checks pass, the backend automatically screens the extracted identity against Pangolin's sanctions dataset.
+4. After those checks pass, the backend automatically screens the extracted identity against the sanctions dataset.
 5. The backend saves the AML result, computes the overall verification status, and sends the existing callback if one was configured.
 
 Default services are now `["document", "face", "aml"]`. Existing clients that
@@ -92,8 +92,8 @@ If the face response is `in_progress`, continue the remaining session steps.
 ## Configuration and deployment
 
 ```dotenv
-YENTE_BASE_URL=https://aml.tuesday.africa
-YENTE_API_TOKEN=<private Pangolin AML token>
+YENTE_BASE_URL=https://aml.example.com
+YENTE_API_TOKEN=<private AML service token>
 YENTE_SCREENING_DATASET=sanctions
 YENTE_POSSIBLE_THRESHOLD=0.7
 YENTE_STRONG_THRESHOLD=0.9

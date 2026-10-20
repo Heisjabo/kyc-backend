@@ -88,7 +88,7 @@ def read_access_token(token: str) -> dict | None:
 
 # Admin console tokens
 #
-# The console (pangolin-admin) gets a token of its own type. A client's dashboard
+# The console gets a token of its own type. A client's dashboard
 # token is never accepted by the console endpoints, and a console token is never
 # accepted by the client ones, because each reader checks `typ`. The role and
 # products travel in the token for the console's convenience only; the endpoints

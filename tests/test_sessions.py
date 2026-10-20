@@ -33,7 +33,7 @@ from app.main import app
 from app.schemas.document import CheckResult, CheckStatus, Decision, DocumentCheckResponse, ExtractedFields
 
 ACCOUNT = {
-    "email": "sessions@tuesday.africa",
+    "email": "sessions@example.com",
     "password": "horse-battery",
     "first_name": "Jean",
     "last_name": "Mugisha",
@@ -155,7 +155,7 @@ def test_the_same_reference_cannot_be_used_twice(client, api_key):
 
 def test_every_verification_opens_its_own_applicant(client, api_key):
     """A client sends one reference per verification and nothing that names the
-    person, the way we send Shufti nothing but a reference. So two attempts by
+    person, the way Shufti takes nothing but a reference. So two attempts by
     the same human are two applicants, and the face seen twice is what links
     them: the duplicate warning, never an automatic merge."""
     first = open_verification(client, api_key)
@@ -468,7 +468,7 @@ def test_a_finished_verification_is_not_expired_afterwards(client, api_key, db_s
 
 def test_one_client_cannot_read_anothers_verification(client, api_key, db_session):
     body = open_verification(client, api_key)
-    other = client.post("/v1/auth/register", json={**ACCOUNT, "email": "other@tuesday.africa"}).json()
+    other = client.post("/v1/auth/register", json={**ACCOUNT, "email": "other@example.com"}).json()
     bearer = {"Authorization": f"Bearer {other['access_token']}"}
     their_key = {"X-API-Key": client.post("/v1/api-keys", json={"name": "theirs"}, headers=bearer).json()["key"]}
     assert client.get(f"/v1/verifications/{body['reference']}", headers=their_key).status_code == 404

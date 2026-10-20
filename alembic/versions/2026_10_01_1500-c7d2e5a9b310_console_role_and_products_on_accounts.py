@@ -4,10 +4,10 @@ Revision ID: c7d2e5a9b310
 Revises: dc771820ad4a
 Create Date: 2026-10-01
 
-Pangolin staff sign in to the admin console (pangolin-admin) with an account
+Staff sign in to the admin console with an account
 like any other, marked by these two columns. console_role is null for every
 client, which is what keeps clients out of the console; console_products lists
-the products ("kyc", "sign") the person may open there.
+the products ("kyc") the person may open there.
 
 Both are additive: existing accounts get a null role and an empty list, so no
 client gains or loses anything.

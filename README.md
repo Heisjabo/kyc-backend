@@ -1,8 +1,8 @@
-# Tuesday KYC Platform
+# KYC Platform
 
 In-house KYC service (FastAPI). Exposes APIs for identity verification.
 
-Persisted document and face verification journeys automatically finish with Pangolin AML sanctions
+Persisted document and face verification journeys automatically finish with AML sanctions
 screening. See [the flow, frontend contract and deployment guide](docs/AML.md).
 
 ## Requirements
@@ -163,11 +163,11 @@ table, which is how the tests build theirs.
 To run them by hand, deploy with `RUN_MIGRATIONS=false` and then:
 
 ```bash
-docker compose exec kyc-api alembic upgrade head
+docker compose exec kyc-platform alembic upgrade head
 ```
 
 **Secrets the workflow expects**, all in the repository's Actions secrets. Each one
-is named once, as an `echo` line in the deploy step, the way tuesday-backend does it.
+is named once, as an `echo` line in the deploy step.
 Adding a setting is one line. Two things happen after those lines are written, and
 both exist because of a real failure: lines with no value are dropped, since pydantic
 refuses an empty string where an int or a bool belongs and would stop the service
@@ -183,7 +183,7 @@ database on localhost, while the health check still passes.
 | `JWT_SECRET` | long and random. The service refuses to start outside development with the published default |
 | `ENVIRONMENT` | `production` |
 | `ENABLE_DOCS` | `false` in production unless the docs are wanted in public |
-| `VERIFY_BASE_URL` | where the person's journey is served, e.g. `https://pangolinkyc.tuesday.africa`. Unset means session links are built from the host the request arrived on, which is the API's own host |
+| `VERIFY_BASE_URL` | where the person's journey is served, e.g. `https://kyc.example.com`. Unset means session links are built from the host the request arrived on, which is the API's own host |
 | `CORS_ORIGINS` | which browsers may call the API. Unset means `*`, any page anywhere. A comma separated list of origins narrows it |
 | `GOOGLE_SERVICE_ACCOUNT_EMAIL`, `GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY` | the key's `client_email` and `private_key`, newlines written as `\n` |
 | `GOOGLE_SERVICE_ACCOUNT_JSON` | or the whole key file on one line, instead of those two |
@@ -255,9 +255,7 @@ A customer of this service holds an **account**. An account owns **API keys**,
 and a key is what a system presents when it calls the API. Neither is the same
 thing as a `user`, which is a person being verified and who never signs in.
 
-Registration asks for what `tuesday-backend`'s signup asks for, minus its trading
-fields (role, amount, stock), its entity representatives, ethnicity, occupation
-and recovery email:
+Registration asks for contact and identity details only:
 
 | required | optional |
 |---|---|
@@ -277,11 +275,8 @@ and recovery email:
 **How the three secrets are handled**, since they are not the same kind of thing:
 
 - **Passwords** are 8 to 16 characters with no required mixture of character
-  classes, the same rule `tuesday-backend` applies, so a person meets one rule
-  across Tuesday rather than a different one per service. They are hashed with
-  Argon2id, and the stored hash is upgraded quietly at sign-in if the parameters
-  move on. (tuesday-backend uses bcrypt at cost 10; that is about how the hash is
-  stored, not what a person has to type.)
+  classes. They are hashed with Argon2id, and the stored hash is upgraded quietly
+  at sign-in if the parameters move on.
 - **API keys** are 32 random bytes generated here, so a slow hash would buy
   nothing and cost a hash on every request. SHA-256, compared in constant time.
   Stored as a prefix, which is how a presented key is found, plus the hash. A
@@ -371,14 +366,14 @@ card with a perfectly good face on it was once recorded as having none.
 
 ```json
 {
-  "reference": "TUESDAY-ORDER-9912",
+  "reference": "ORDER-9912",
   "services": ["document", "face"],
   "applicant": {
     "first_name": "Jean Marie",
     "last_name": "Jabo",
     "date_of_birth": "2002-02-24",
     "country": "Rwanda",
-    "email": "jean@tuesday.africa",
+    "email": "jean@example.com",
     "phone": "+250788123456"
   },
   "country": "RWA",
@@ -387,7 +382,7 @@ card with a perfectly good face on it was once recorded as having none.
 }
 ```
 
-`reference` is the only identifier a client sends, exactly as we send Shufti
+`reference` is the only identifier a client sends, the way Shufti takes
 nothing but a reference. Nothing names the person: `customer_id` comes back in
 the response, generated here, and is theirs to store if they want to recognise a
 returning applicant later.
@@ -590,9 +585,7 @@ otherwise write into one folder. The storage key is the Drive file id. Each row
 also records the size and a SHA-256, so a file can be proved to be the one that
 was judged.
 
-Drive is reached with a **service account key**, the way our database backups do
-it. rclone is not involved here: we call the Drive API directly, with the same
-kind of key.
+Drive is reached with a **service account key**, calling the Drive API directly.
 
 | setting | where it comes from |
 |---|---|
@@ -641,7 +634,7 @@ Deliberately parked, in the order they matter:
 
 ## Due diligence forms
 
-Written by Pangolin staff in the admin console (`/v1/console/due-diligence/forms`):
+Written by staff in the admin console (`/v1/console/due-diligence/forms`):
 owners and admins create and edit them, every other console role reads them.
 A form has a name, a status (`draft`, `active`, `archived`), the clients allowed
 to use it, and its questions. Each question has a `key`, a label, a type, and
@@ -661,7 +654,7 @@ so editing a form never changes what an old answer meant. A form is never
 deleted, only archived: archiving stops new verifications from using it, not the
 ones already sent.
 
-The Net worth assessment the Shufti journey asks today is created by the
+A Net worth assessment form is created by the
 migration as `net_worth_assessment`, active, with no clients.
 
 ## Document check
@@ -675,7 +668,7 @@ migration as `net_worth_assessment`, active, with no clients.
 | `back` | no | Back side of ID cards and licences |
 | `first_name`, `last_name` | no* | Compared with the name on the document |
 | `date_of_birth` | no | `YYYY-MM-DD`, compared with the document |
-| `issuing_country` | no | `RW`, `RWA` or `Rwanda`. The backend's own country values (2-letter, as sent to Shufti) work as they are. |
+| `issuing_country` | no | `RW`, `RWA` or `Rwanda`. 2-letter codes work as they are. |
 
 *Required for a `pass` on documents without an MRZ.
 
@@ -699,7 +692,7 @@ it. Thresholds live in `app/rules/document.py`.
 
 | Field | Required | Notes |
 |---|---|---|
-| `document_type` | yes | `utility_bill`, `bank_statement`, `credit_card_statement` or `rent_agreement`, the `supported_types` we send Shufti |
+| `document_type` | yes | `utility_bill`, `bank_statement`, `credit_card_statement` or `rent_agreement`, as Shufti's `supported_types` |
 | `proof` | yes | **PDF**, JPEG, PNG or WebP, max 10 MB |
 | `back` | no | A second file, when the proof is in two |
 
@@ -759,10 +752,10 @@ their customers actually hold. An address stored as "Kigali" will not pass again
 anything, and that is the client's data to fix rather than something for the
 matcher to guess at.
 
-A **PO box fails** (`PO_BOX_NOT_ACCEPTED`), before anything is read, because our
-Shufti request says `po_box: false` and a mailbox is not somewhere anybody lives.
+A **PO box fails** (`PO_BOX_NOT_ACCEPTED`), before anything is read, as Shufti's
+`po_box: false` does, and a mailbox is not somewhere anybody lives.
 
-**90 days**, as the `document_validity` we send Shufti: the newest date on the
+**90 days**, as Shufti's `document_validity`: the newest date on the
 page that is not in the future has to be within that, or the proof is too old. No
 readable date at all goes to a person rather than failing, because plenty of
 genuine bills print one in a format nothing reads.

@@ -77,11 +77,11 @@ IMAGE_SIDE = _pg_enum(ImageSide, "image_side")
 _EMPTY_LIST = text("'[]'::jsonb")
 _EMPTY_OBJECT = text("'{}'::jsonb")
 
-# The admin console's roles and products, the same ones pangolin-admin shows on
+# The admin console's roles and products, the same ones the admin console shows on
 # its Team & roles page. Kept as strings rather than a Postgres enum so a role can
 # be added without a migration.
 CONSOLE_ROLES = ("owner", "admin", "reviewer", "support", "readonly")
-CONSOLE_PRODUCTS = ("kyc", "sign")
+CONSOLE_PRODUCTS = ("kyc",)
 
 
 class Account(Base):
@@ -90,10 +90,8 @@ class Account(Base):
     Not to be confused with User below, which is a person being *verified*. An
     account holds API keys and, later, the verifications made under them.
 
-    The fields follow tuesday-backend's signup, minus the parts that belong to
-    its trading flow (role, amount, stock) and to its entity path (company
-    representatives), so a person signing up here is asked what they are already
-    asked over there.
+    Contact and identity details only: nothing about trading (role, amount,
+    stock) and no company representatives.
     """
 
     __tablename__ = "accounts"
@@ -115,7 +113,7 @@ class Account(Base):
 
     first_name: Mapped[str] = mapped_column(String, nullable=False)
     last_name: Mapped[str] = mapped_column(String, nullable=False)
-    # Kept apart from the number itself, the way tuesday-backend keeps it: the
+    # Kept apart from the number itself: the
     # same number reads differently under a different dialling code.
     country_code: Mapped[str] = mapped_column(String(8), nullable=False)
     phone: Mapped[str] = mapped_column(String(32), nullable=False)
@@ -131,10 +129,10 @@ class Account(Base):
     # A suspended account keeps its keys and its history; they simply stop working.
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"))
 
-    # Set only for Pangolin staff who sign in to the admin console (pangolin-admin).
+    # Set only for staff who sign in to the admin console.
     # Null for every client account, which is what keeps a client out of it. The
     # role is one of CONSOLE_ROLES; the products are the ones this person may open
-    # there ("kyc", "sign").
+    # there ("kyc").
     console_role: Mapped[str | None] = mapped_column(String(16))
     console_products: Mapped[list] = mapped_column(JSONB, nullable=False, server_default=_EMPTY_LIST)
 
@@ -182,7 +180,7 @@ class ApiKey(Base):
     # Written on use, so a key nobody calls can be found and removed.
     last_used_at: Mapped[Timestamp | None]
     revoked_at: Mapped[Timestamp | None]
-    # Set by Pangolin staff in the admin console to stop a key for now. Unlike
+    # Set by staff in the admin console to stop a key for now. Unlike
     # revoking, it can be undone: clearing it lets the key work again.
     suspended_at: Mapped[Timestamp | None]
     # Set when the owner deletes the key: it is revoked first, then left out of
@@ -796,9 +794,9 @@ TOP_UP_STATUSES = ("pending", "paid", "failed", "expired", "refunded")
 
 class CreditGrant(Base):
     """A batch of units an account may spend: its free allowance, a top-up it
-    paid for, or credit given by Pangolin staff.
+    paid for, or credit given by staff.
 
-    Counted in units (one verification, one Sign request), not money: free and
+    Counted in units (one verification), not money: free and
     paid credit then spend the same way, and an Enterprise rate is only a
     different price on the grant. `remaining` is the balance; it goes down when
     a unit is reserved and back up when a reservation is released.
@@ -841,7 +839,7 @@ class UsageEvent(Base):
 
     A verification reserves a unit when it is opened, commits it when it is
     decided, and releases it if it expires first. The unique keys make each of
-    those happen at most once per verification (or per Sign request), so a
+    those happen at most once per verification, so a
     retried request or a second settle can never charge twice.
     """
 
@@ -860,7 +858,7 @@ class UsageEvent(Base):
     verification_id: Mapped[int | None] = mapped_column(
         BigInteger, ForeignKey("verifications.id", ondelete="SET NULL"), index=True
     )
-    # The Sign server's own id for a request: Sign requests are not rows here.
+    # An outside id for what the unit was spent on, when it is not a verification.
     external_ref: Mapped[str | None] = mapped_column(String(128))
     # The grant the unit came from. Null when the account had none left and was
     # let through anyway: overdraft, or billing not yet enforced.

@@ -1,6 +1,6 @@
 """ISO 3166-1 alpha-2 to alpha-3 country codes.
 
-Our backend stores and sends Shufti 2-letter codes (RW, KE); the MRZ and this
+Clients commonly send 2-letter codes (RW, KE); the MRZ and this
 service work in the 3-letter ICAO/ISO codes (RWA, KEN). Generated from pycountry.
 """
 

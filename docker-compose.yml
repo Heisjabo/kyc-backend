@@ -1,9 +1,9 @@
 services:
-  kyc-api:
+  kyc-platform:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: kyc-api
+    container_name: kyc-platform
     restart: always
     ports:
       # 4500 on the host, 8000 inside. 8000 is left alone because something else

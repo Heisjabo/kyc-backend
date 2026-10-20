@@ -22,6 +22,7 @@ from sqlalchemy.orm import sessionmaker
 from app.core.config import settings
 from app.db.base import Base
 from app.db.models import (
+    Account,
     DocumentScan,
     FileKind,
     Step,
@@ -121,6 +122,13 @@ def staff_token(client, db_session, email="staff@example.com", products=("kyc",)
         date_of_birth=date(1990, 1, 1),
     )
     return client.post("/v1/console/auth/login", json={"email": email, "password": PASSWORD}).json()["access_token"]
+
+
+def without_products(db_session, email: str) -> None:
+    """Take every console product away from a staff account, keeping its role."""
+    account = db_session.scalar(select(Account).where(Account.email == email))
+    account.console_products = []
+    db_session.commit()
 
 
 @pytest.fixture()
@@ -244,11 +252,12 @@ def test_an_unknown_id_is_not_found(client, db_session):
 
 def test_only_staff_with_kyc_access_may_look(client, db_session, two_clients):
     _, client_token = client_key(client, "ops@gamma.example.com", "Gamma")
-    sign_only = staff_token(client, db_session, email="signer@example.com", products=("sign",))
+    no_kyc = staff_token(client, db_session, email="noproducts@example.com")
+    without_products(db_session, "noproducts@example.com")
 
     assert client.get("/v1/console/verifications").status_code == 401
     assert client.get("/v1/console/verifications", headers=auth(client_token)).status_code == 401
-    assert client.get("/v1/console/verifications", headers=auth(sign_only)).status_code == 403
+    assert client.get("/v1/console/verifications", headers=auth(no_kyc)).status_code == 403
 
 
 # Evidence
@@ -365,7 +374,8 @@ def test_only_readable_videos_have_a_thumbnail(client, db_session, captured):
 
 def test_files_need_kyc_access(client, db_session, captured):
     verification, files = captured
-    sign_only = staff_token(client, db_session, email="signer@example.com", products=("sign",))
+    no_kyc = staff_token(client, db_session, email="noproducts@example.com")
+    without_products(db_session, "noproducts@example.com")
     url = f"/v1/console/verifications/{verification.id}/files/{files['front'].id}"
     assert client.get(url).status_code == 401
-    assert client.get(url, headers=auth(sign_only)).status_code == 403
+    assert client.get(url, headers=auth(no_kyc)).status_code == 403

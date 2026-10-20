@@ -14,7 +14,7 @@
 # Our migrations are additive. If one ever is not, that is the moment to deploy it
 # with RUN_MIGRATIONS=false and run it by hand:
 #
-#   docker compose exec kyc-api alembic upgrade head
+#   docker compose exec kyc-platform alembic upgrade head
 set -e
 
 if [ "${RUN_MIGRATIONS}" = "false" ]; then

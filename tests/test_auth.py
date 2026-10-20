@@ -27,7 +27,7 @@ from app.main import app
 
 GOOD_PASSWORD = "horse-battery"          # 13, inside the 12 to 128 rule
 SIGN_UP = {
-    "email": "Jean@Tuesday.africa",
+    "email": "Jean@example.com",
     "password": GOOD_PASSWORD,
     "first_name": "Jean",
     "last_name": "Mugisha",
@@ -110,7 +110,7 @@ def test_registering_opens_an_account_and_signs_in(client):
     response = register(client)
     body = response.json()
     assert response.status_code == 201
-    assert body["account"]["email"] == "jean@tuesday.africa"      # stored lower case
+    assert body["account"]["email"] == "jean@example.com"      # stored lower case
     assert body["account"]["first_name"] == "Jean" and body["account"]["country"] == "Rwanda"
     assert body["expires_in"] > 0 and body["token_type"] == "bearer"
     assert "password" not in str(body)
@@ -126,7 +126,7 @@ def test_the_password_is_never_stored_in_the_clear(client, db_session):
 def test_an_address_can_only_have_one_account(client):
     register(client)
     assert register(client, first_name="Someone", last_name="Else").status_code == 409
-    assert register(client, email="JEAN@tuesday.africa").status_code == 409   # case does not matter
+    assert register(client, email="JEAN@example.com").status_code == 409   # case does not matter
 
 
 @pytest.mark.parametrize("password", ["short", "elevenchars"])
@@ -136,7 +136,7 @@ def test_a_password_under_twelve_characters_is_refused(client, password):
 
 def test_long_passphrases_are_allowed_up_to_128(client):
     assert register(client, password="correct horse battery staple " * 4).status_code == 201   # 116
-    assert register(client, email="b@tuesday.africa", password="a1b2c3d4" * 17).status_code == 422  # 136
+    assert register(client, email="b@example.com", password="a1b2c3d4" * 17).status_code == 422  # 136
 
 
 @pytest.mark.parametrize("password", ["password1234", "Password123456", "qwertyuiop123", "welcome2025!!", "aaaaaaaaaaaaaa"])
@@ -151,9 +151,8 @@ def test_a_new_password_is_checked_on_reset_too(client):
 
 
 @pytest.mark.parametrize("missing", ["first_name", "last_name", "phone", "country_code", "date_of_birth", "country"])
-def test_the_details_tuesday_asks_for_are_required(client, missing):
-    """The same details tuesday-backend's signup collects, minus its trading
-    fields, its entity representatives and ethnicity."""
+def test_the_signup_details_are_required(client, missing):
+    """Every contact and identity detail asked for at signup is required."""
     body = {key: value for key, value in SIGN_UP.items() if key != missing}
     assert client.post("/v1/auth/register", json=body).status_code == 422
 
@@ -168,14 +167,14 @@ def test_the_softer_details_are_optional(client, optional):
 
 def test_signing_in_with_the_right_password(client):
     register(client)
-    response = client.post("/v1/auth/login", json={"email": "jean@tuesday.africa", "password": GOOD_PASSWORD})
+    response = client.post("/v1/auth/login", json={"email": "jean@example.com", "password": GOOD_PASSWORD})
     assert response.status_code == 200 and response.json()["access_token"]
 
 
 def test_a_wrong_password_and_an_unknown_address_look_the_same(client):
     register(client)
-    wrong = client.post("/v1/auth/login", json={"email": "jean@tuesday.africa", "password": "not-the-password"})
-    unknown = client.post("/v1/auth/login", json={"email": "nobody@tuesday.africa", "password": GOOD_PASSWORD})
+    wrong = client.post("/v1/auth/login", json={"email": "jean@example.com", "password": "not-the-password"})
+    unknown = client.post("/v1/auth/login", json={"email": "nobody@example.com", "password": GOOD_PASSWORD})
     assert wrong.status_code == unknown.status_code == 401
     assert wrong.json()["detail"] == unknown.json()["detail"]
 
@@ -184,14 +183,14 @@ def test_a_suspended_account_cannot_sign_in(client, db_session):
     register(client)
     db_session.scalar(select(Account)).is_active = False
     db_session.commit()
-    response = client.post("/v1/auth/login", json={"email": "jean@tuesday.africa", "password": GOOD_PASSWORD})
+    response = client.post("/v1/auth/login", json={"email": "jean@example.com", "password": GOOD_PASSWORD})
     assert response.status_code == 403
 
 
 def test_the_session_token_identifies_the_account(client):
     token = signed_in(client)
     me = client.get("/v1/auth/me", headers=auth(token)).json()
-    assert me["email"] == "jean@tuesday.africa"
+    assert me["email"] == "jean@example.com"
     assert me["phone"] == "788123456" and me["country_code"] == "+250"
 
 
@@ -206,8 +205,8 @@ def test_no_token_and_a_tampered_token_are_both_refused(client):
 def test_the_answer_is_the_same_whether_the_address_is_known(client):
     """Confirming which addresses have accounts hands over a list worth stealing."""
     register(client)
-    known = client.post("/v1/auth/forgot-password", json={"email": "jean@tuesday.africa"})
-    unknown = client.post("/v1/auth/forgot-password", json={"email": "nobody@tuesday.africa"})
+    known = client.post("/v1/auth/forgot-password", json={"email": "jean@example.com"})
+    unknown = client.post("/v1/auth/forgot-password", json={"email": "nobody@example.com"})
     assert known.status_code == unknown.status_code == 200
     assert known.json()["message"] == unknown.json()["message"]
     assert unknown.json()["reset_token"] is None
@@ -215,20 +214,20 @@ def test_the_answer_is_the_same_whether_the_address_is_known(client):
 
 def test_a_reset_token_sets_a_new_password(client):
     register(client)
-    token = client.post("/v1/auth/forgot-password", json={"email": "jean@tuesday.africa"}).json()["reset_token"]
+    token = client.post("/v1/auth/forgot-password", json={"email": "jean@example.com"}).json()["reset_token"]
     assert token                                    # development only, while there is no email
 
     response = client.post("/v1/auth/reset-password", json={"token": token, "password": "brand-new-pass"})
     assert response.status_code == 200
 
-    old = client.post("/v1/auth/login", json={"email": "jean@tuesday.africa", "password": GOOD_PASSWORD})
-    new = client.post("/v1/auth/login", json={"email": "jean@tuesday.africa", "password": "brand-new-pass"})
+    old = client.post("/v1/auth/login", json={"email": "jean@example.com", "password": GOOD_PASSWORD})
+    new = client.post("/v1/auth/login", json={"email": "jean@example.com", "password": "brand-new-pass"})
     assert old.status_code == 401 and new.status_code == 200
 
 
 def test_a_reset_token_works_once(client):
     register(client)
-    token = client.post("/v1/auth/forgot-password", json={"email": "jean@tuesday.africa"}).json()["reset_token"]
+    token = client.post("/v1/auth/forgot-password", json={"email": "jean@example.com"}).json()["reset_token"]
     client.post("/v1/auth/reset-password", json={"token": token, "password": "brand-new-pass"})
     again = client.post("/v1/auth/reset-password", json={"token": token, "password": "another-pass12"})
     assert again.status_code == 400
@@ -236,7 +235,7 @@ def test_a_reset_token_works_once(client):
 
 def test_an_expired_reset_token_is_refused(client, db_session):
     register(client)
-    token = client.post("/v1/auth/forgot-password", json={"email": "jean@tuesday.africa"}).json()["reset_token"]
+    token = client.post("/v1/auth/forgot-password", json={"email": "jean@example.com"}).json()["reset_token"]
     row = db_session.scalar(select(PasswordReset))
     row.expires_at = datetime.now(UTC) - timedelta(minutes=1)
     db_session.commit()
@@ -250,7 +249,7 @@ def test_an_invented_token_is_refused(client):
 
 def test_the_reset_token_is_not_stored_in_the_clear(client, db_session):
     register(client)
-    token = client.post("/v1/auth/forgot-password", json={"email": "jean@tuesday.africa"}).json()["reset_token"]
+    token = client.post("/v1/auth/forgot-password", json={"email": "jean@example.com"}).json()["reset_token"]
     assert db_session.scalar(select(PasswordReset)).token_hash != token
 
 
@@ -284,7 +283,7 @@ def test_a_key_authorises_calls_for_its_account(client):
     token = signed_in(client)
     key = make_key(client, token).json()["key"]
     response = client.guarded.get("/guarded", headers={"X-API-Key": key})
-    assert response.status_code == 200 and response.json()["account"] == "jean@tuesday.africa"
+    assert response.status_code == 200 and response.json()["account"] == "jean@example.com"
 
 
 def test_a_key_whose_secret_contains_an_underscore_still_works(client):
@@ -347,7 +346,7 @@ def test_a_key_belonging_to_a_suspended_account_stops_working(client, db_session
 def test_one_account_cannot_revoke_another_accounts_key(client):
     mine = signed_in(client)
     created = make_key(client, mine).json()
-    theirs = register(client, email="other@tuesday.africa", first_name="Other").json()["access_token"]
+    theirs = register(client, email="other@example.com", first_name="Other").json()["access_token"]
     assert client.delete(f"/v1/api-keys/{created['id']}", headers=auth(theirs)).status_code == 404
     assert client.guarded.get("/guarded", headers={"X-API-Key": created["key"]}).status_code == 200
 
@@ -355,7 +354,7 @@ def test_one_account_cannot_revoke_another_accounts_key(client):
 def test_keys_are_listed_only_to_their_owner(client):
     mine = signed_in(client)
     make_key(client, mine)
-    theirs = register(client, email="other@tuesday.africa", first_name="Other").json()["access_token"]
+    theirs = register(client, email="other@example.com", first_name="Other").json()["access_token"]
     assert client.get("/v1/api-keys", headers=auth(mine)).json()["total"] == 1
     assert client.get("/v1/api-keys", headers=auth(theirs)).json()["items"] == []
 
@@ -378,9 +377,9 @@ def test_the_auth_endpoints_are_in_the_api_schema(client):
 def test_a_token_stops_working_when_the_password_is_reset(client):
     token = signed_in(client)
     assert client.get("/v1/auth/me", headers=auth(token)).status_code == 200
-    reset = client.post("/v1/auth/forgot-password", json={"email": "jean@tuesday.africa"}).json()["reset_token"]
+    reset = client.post("/v1/auth/forgot-password", json={"email": "jean@example.com"}).json()["reset_token"]
     assert client.post("/v1/auth/reset-password", json={"token": reset, "password": "brand-new-pass"}).status_code == 200
 
     assert client.get("/v1/auth/me", headers=auth(token)).status_code == 401
-    new = client.post("/v1/auth/login", json={"email": "jean@tuesday.africa", "password": "brand-new-pass"})
+    new = client.post("/v1/auth/login", json={"email": "jean@example.com", "password": "brand-new-pass"})
     assert client.get("/v1/auth/me", headers=auth(new.json()["access_token"])).status_code == 200
