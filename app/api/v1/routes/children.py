@@ -42,6 +42,7 @@ from app.rules import document as document_rules
 from app.schemas.document import Applicant as ApplicantDetails
 from app.schemas.document import CheckResult, CheckStatus, Decision, DocumentType
 from app.schemas.verification import ChildVerificationResponse, VerifyChildRequest
+from app.services import billing
 from app.services import verifications as service
 from app.storage import evidence
 from app.db.models import VerificationFile
@@ -94,15 +95,20 @@ def verify_child(
     # A verification of its own, belonging to the child and pointing at the
     # parent's. It is a verification because that is what it is: its own
     # document, its own verdict, its own evidence.
-    child = service.create_verification(
-        db,
-        account.id,
-        base_url=str(request.base_url),
-        services=[VerificationStep.document.value],
-        claimed=body.model_dump(mode="json", exclude_none=True),
-        country=parent.applicant.country,
-        language=parent.language,
-    )
+    # A child's verification takes a unit of its own, like any other.
+    try:
+        child = service.create_verification(
+            db,
+            account.id,
+            base_url=str(request.base_url),
+            services=[VerificationStep.document.value],
+            claimed=body.model_dump(mode="json", exclude_none=True),
+            country=parent.applicant.country,
+            language=parent.language,
+        )
+    except billing.OutOfCredit as refused:
+        db.rollback()
+        raise HTTPException(status.HTTP_402_PAYMENT_REQUIRED, str(refused))
     child.parent_verification_id = parent.id
     db.flush()
 

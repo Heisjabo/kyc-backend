@@ -40,6 +40,7 @@ from app.schemas.verification import (
     VerificationResponse,
 )
 from app.reports import verification as report
+from app.services import billing
 from app.services import due_diligence as forms
 from app.services import verifications as service
 from app.storage import evidence
@@ -116,8 +117,11 @@ def create_verification(
         )
         if today >= settings.MAX_VERIFICATIONS_PER_DAY:
             raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, "This account has reached its daily limit of verifications")
-    # Existing clients that send document + face receive the final AML check too.
-    if 'document' in body.services and 'face' in body.services and 'aml' not in body.services:
+    # Existing clients that send document + face receive the final AML check too,
+    # when their plan includes it. On a plan without it the check is left out
+    # rather than the request refused; asking for 'aml' outright is refused below.
+    if ('document' in body.services and 'face' in body.services and 'aml' not in body.services
+            and billing.allows(account, 'aml')):
         body.services.append('aml')
     # A form_id is how Shufti's clients ask for the questionnaire, so sending one
     # is enough: the due diligence step is added for them, ahead of AML.
@@ -138,6 +142,10 @@ def create_verification(
         )
     if not body.services:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "At least one service is required")
+    try:
+        billing.check_services(account, body.services)
+    except billing.NotInPlan as refused:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, str(refused))
 
     # The address step has nothing to check a document against unless the client
     # says where the person lives. Refused here rather than at the step, where the
@@ -187,6 +195,9 @@ def create_verification(
             status.HTTP_409_CONFLICT,
             f"reference {body.reference!r} has already been used on this account",
         )
+    except billing.OutOfCredit as refused:
+        db.rollback()
+        raise HTTPException(status.HTTP_402_PAYMENT_REQUIRED, str(refused))
     return _as_response(verification)
 
 

@@ -30,6 +30,7 @@ from sqlalchemy import (
     Float,
     Enum,
     ForeignKey,
+    Index,
     Integer,
     String,
     UniqueConstraint,
@@ -136,6 +137,17 @@ class Account(Base):
     # there ("kyc", "sign").
     console_role: Mapped[str | None] = mapped_column(String(16))
     console_products: Mapped[list] = mapped_column(JSONB, nullable=False, server_default=_EMPTY_LIST)
+
+    # Billing. The plan decides which features the account may use
+    # (app/core/plans.py); what it has left to spend is in credit_grants.
+    plan: Mapped[str] = mapped_column(String(16), nullable=False, server_default="free")
+    plan_changed_at: Mapped[Timestamp | None]
+    # What one unit costs this client once its free credit is spent, in US
+    # cents: $1 unless an Enterprise rate has been agreed.
+    unit_price_cents: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("100"))
+    # Lets an invoiced Enterprise account keep verifying once its credit is
+    # spent. What it uses past zero is still metered, for the invoice.
+    allow_overdraft: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
 
     last_login_at: Mapped[Timestamp | None]
     created_at: Mapped[CreatedAt]
@@ -771,3 +783,119 @@ class ConsoleInvite(Base):
     )
     revoked_at: Mapped[Timestamp | None]
     created_at: Mapped[CreatedAt]
+
+
+# Where a grant of credit came from. Strings rather than a Postgres enum, like
+# the console roles, so a new source needs no migration.
+GRANT_SOURCES = ("free_grant", "top_up", "manual")
+# What happened to one unit of usage: held when the work began, then either
+# charged once it was decided or handed back when it never was.
+USAGE_KINDS = ("reserve", "commit", "release")
+TOP_UP_STATUSES = ("pending", "paid", "failed", "expired", "refunded")
+
+
+class CreditGrant(Base):
+    """A batch of units an account may spend: its free allowance, a top-up it
+    paid for, or credit given by Pangolin staff.
+
+    Counted in units (one verification, one Sign request), not money: free and
+    paid credit then spend the same way, and an Enterprise rate is only a
+    different price on the grant. `remaining` is the balance; it goes down when
+    a unit is reserved and back up when a reservation is released.
+    """
+
+    __tablename__ = "credit_grants"
+    # The free allowance is given once per product, however many requests race
+    # to give it.
+    __table_args__ = (
+        Index(
+            "uq_credit_grants_free_once",
+            "account_id",
+            "product",
+            unique=True,
+            postgresql_where=text("source = 'free_grant'"),
+        ),
+    )
+
+    id: Mapped[IntPk]
+    account_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    product: Mapped[str] = mapped_column(String(16), nullable=False)
+    source: Mapped[str] = mapped_column(String(16), nullable=False)
+    quantity: Mapped[int] = mapped_column(Integer, nullable=False)
+    remaining: Mapped[int] = mapped_column(Integer, nullable=False)
+    # What one unit of this grant is worth, in US cents: 0 for free credit.
+    unit_price_cents: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    top_up_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("top_ups.id", ondelete="RESTRICT"), unique=True
+    )
+    # Why staff gave it, for a manual grant.
+    note: Mapped[str | None] = mapped_column(String(500))
+    granted_by_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("accounts.id", ondelete="SET NULL"))
+    created_at: Mapped[CreatedAt]
+
+
+class UsageEvent(Base):
+    """One movement of one unit, never changed once written.
+
+    A verification reserves a unit when it is opened, commits it when it is
+    decided, and releases it if it expires first. The unique keys make each of
+    those happen at most once per verification (or per Sign request), so a
+    retried request or a second settle can never charge twice.
+    """
+
+    __tablename__ = "usage_events"
+    __table_args__ = (
+        UniqueConstraint("verification_id", "kind"),
+        UniqueConstraint("account_id", "product", "external_ref", "kind"),
+    )
+
+    id: Mapped[IntPk]
+    account_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    product: Mapped[str] = mapped_column(String(16), nullable=False)
+    kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    verification_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("verifications.id", ondelete="SET NULL"), index=True
+    )
+    # The Sign server's own id for a request: Sign requests are not rows here.
+    external_ref: Mapped[str | None] = mapped_column(String(128))
+    # The grant the unit came from. Null when the account had none left and was
+    # let through anyway: overdraft, or billing not yet enforced.
+    grant_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("credit_grants.id", ondelete="SET NULL"), index=True
+    )
+    unit_price_cents: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    created_at: Mapped[CreatedAt]
+
+
+class TopUp(Base):
+    """A card payment for credit. Written when checkout starts; once the payment
+    provider says it is paid, a CreditGrant for `units` is made from it.
+
+    The payment provider is not wired up yet (Bachs is planned); the table is
+    here so the grants that will hang off it have somewhere to point.
+    """
+
+    __tablename__ = "top_ups"
+
+    id: Mapped[IntPk]
+    account_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("accounts.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    provider: Mapped[str] = mapped_column(String(32), nullable=False)
+    # Ours, sent to the provider so its callbacks can be matched back.
+    reference: Mapped[str] = mapped_column(String(128), unique=True, nullable=False)
+    checkout_id: Mapped[str | None] = mapped_column(String(128), unique=True)
+    charge_id: Mapped[str | None] = mapped_column(String(128))
+    units: Mapped[int] = mapped_column(Integer, nullable=False)
+    # Always US dollars, in cents.
+    amount_cents: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, server_default="pending", index=True)
+    # The provider's last word on it, kept whole for disputes.
+    raw: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default=_EMPTY_OBJECT)
+    paid_at: Mapped[Timestamp | None]
+    created_at: Mapped[CreatedAt]
+    updated_at: Mapped[UpdatedAt]

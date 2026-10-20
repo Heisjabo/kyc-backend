@@ -78,6 +78,8 @@ jobs:
             echo "EMAIL_ENABLED=${{ secrets.EMAIL_ENABLED }}";
             echo "DASHBOARD_URL=${{ secrets.DASHBOARD_URL }}";
 
+            echo "BILLING_ENFORCED=${{ secrets.BILLING_ENFORCED }}";
+
             echo "WEB_CONCURRENCY=${{ secrets.WEB_CONCURRENCY }}";
             echo "RUN_MIGRATIONS=${{ secrets.RUN_MIGRATIONS }}";
           } > .env.all
