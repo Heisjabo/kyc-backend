@@ -1,911 +1,133 @@
 # KYC Platform
 
-In-house KYC service (FastAPI). Exposes APIs for identity verification.
+An identity verification (KYC) and AML screening service. A person photographs an
+identity document and takes a short face capture. The service reads the document,
+checks that the person is live and is the one on the document, screens them
+against sanctions lists and produces a PDF report.
 
-Persisted document and face verification journeys automatically finish with AML sanctions
-screening. See [the flow, frontend contract and deployment guide](docs/AML.md).
+## Tools used
 
-## Requirements
+| Area | What is used |
+|---|---|
+| Language | Python 3.11 |
+| API | FastAPI on Uvicorn |
+| Database | PostgreSQL, SQLAlchemy 2, psycopg 3, Alembic migrations |
+| OCR | RapidOCR (PaddleOCR models on ONNX Runtime), Tesseract for the MRZ |
+| Images and PDFs | OpenCV, Pillow, NumPy, pypdfium2 |
+| Face detection | YuNet (liveness framing), SCRFD (matching) |
+| Face recognition | ArcFace `w600k_r50` from InsightFace, on ONNX Runtime |
+| Liveness | MediaPipe face landmarker, run through `ai-edge-litert` |
+| AI-generated image detection | Community Forensics ViT-S, exported to ONNX |
+| AML screening | A separate [Yente](https://github.com/opensanctions/yente) (OpenSanctions) service |
+| Evidence storage | Google Drive through a service account, or a local folder |
+| Reports | ReportLab PDFs, segno QR codes |
+| Tests | pytest |
+
+## Running it locally
+
+### 1. Prerequisites
 
 - Python 3.11
-- Tesseract OCR: `brew install tesseract` (macOS) or `apt install tesseract-ocr` (Linux)
-- RapidOCR models (~30 MB) download automatically on first run
-- Face detector for liveness (~230 KB) and the two matching models from
-  InsightFace's `buffalo_l` pack (~190 MB together), downloaded once:
+- PostgreSQL 14 or newer
+- Tesseract: `brew install tesseract` on macOS, `sudo apt install tesseract-ocr` on Debian or Ubuntu
+- A C/C++ compiler for `insightface` (Xcode Command Line Tools on macOS, `build-essential` and `cmake` on Linux)
+
+### 2. Clone and install
 
 ```bash
-mkdir -p models && curl -sL -o models/face_detection_yunet_2023mar.onnx \
+git clone <this repository's URL> kyc-platform
+cd kyc-platform
+python3.11 -m venv .venv
+source .venv/bin/activate
+pip install --upgrade pip
+pip install -r requirements-dev.txt
+```
+
+### 3. Download the models
+
+The models are not in git. They go in `models/` (about 290 MB):
+
+```bash
+mkdir -p models
+
+curl -sL -o models/face_detection_yunet_2023mar.onnx \
   https://github.com/opencv/opencv_zoo/raw/main/models/face_detection_yunet/face_detection_yunet_2023mar.onnx
 
-# SCRFD detection (det_10g.onnx) and ArcFace recognition (w600k_r50.onnx)
 curl -sL -o /tmp/buffalo_l.zip \
   https://github.com/deepinsight/insightface/releases/download/v0.7/buffalo_l.zip
 unzip -j -o /tmp/buffalo_l.zip 'det_10g.onnx' 'w600k_r50.onnx' -d models/
+rm /tmp/buffalo_l.zip
 
-# MediaPipe face landmarker (~3.8 MB), the 478-point mesh used for liveness
 curl -sL -o models/face_landmarker.task \
   https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/latest/face_landmarker.task
 
-# AI-generated image detector (~87 MB), Community Forensics ViT-S. Optional: without
-# it the ai_generated check is skipped. Pinned to the author's corrected export.
+# Optional: without it the AI-generated image check is skipped.
 curl -sL -o models/ai_image_detector.onnx \
   https://huggingface.co/buildborderless/CommunityForensics-DeepfakeDet-ViT/resolve/ac6ee457bea904a373065754107451793b56db00/onnx/model.onnx
 ```
 
-Expected SHA-256:
-
-```
-5838f7fe053675b1c7a08b633df49e7af5495cee0493c7dcf6697200b85b5b91  det_10g.onnx
-4c06341c33c2ca1f86781dab0e829f88ad5b64be9fba56e56bc9ebdefc619e43  w600k_r50.onnx
-a42c7d740fbb345ba9a26d469b22f301d73089ce3c6da993877ed2b6965a8ba1  ai_image_detector.onnx
-```
-
-### AI-generated image detection
-
-The document step and liveness both run an `ai_generated` check: was this image made
-by a generator? It uses the detector from *Community Forensics: Using Thousands of
-Generators to Train Fake Image Detectors* (Park and Owens, CVPR 2025, MIT), trained on
-images from 4,803 generators.
-
-- **Document:** the front, the back and the portrait on the front are scored, and the
-  highest score counts, since a forger may generate only the face.
-- **Liveness:** the still and two frames through the capture are scored, and the
-  median counts: a deepfake stream is generated in every frame.
-- **Address:** the proof is scored too. A PDF is **always** rendered and scored on
-  its pages, even when its text could be read directly from the text layer, because
-  a bill is the easiest document in this flow to generate and it is the only one we
-  accept as a PDF. The text still comes from the text layer when there is one, which
-  is more accurate than reading a rendering of it; the rendering exists to be scored
-  and to be compared with.
-- **A PDF's text layer is checked against its page.** The two are independent: on a
-  scan the text layer is whatever a scanner app wrote, or whatever somebody replaced
-  it with, so a bill can show a Nairobi address while its text says Kigali, and every
-  check here reads the text. When a PDF is read from its text layer its pages are
-  OCRed too, and the claimed address has to appear in both. In the text and not on
-  the page is `PDF_TEXT_LAYER_DISAGREES`, and the step goes to **review**: that is
-  the shape of the attack, and the address match cannot be trusted once the two
-  differ. Dates that disagree are a warning only, since OCR misreads them often
-  enough that failing would be noise.
-- **Verdict: it never fails a verification.** At `AI_IMAGE_DETECT_THRESHOLD` (0.9)
-  the step passes with the warning `AI_GENERATED_IMAGE` and records the flag; from
-  `AI_IMAGE_SUSPECT_THRESHOLD` (0.5) it warns `AI_GENERATED_SUSPECTED` without
-  setting the flag. Both are settings. The reason is that a detector which refuses
-  people would refuse real ones: it misses some diffusion images and flags
-  photographs run through a generative "enhance" app, which many phones now do by
-  default. So the other checks decide the verdict and this rides along as a flag a
-  person can act on.
-- **Every step records it.** `verification_steps.ai_generated` is true when one of
-  that step's images scored at or above the detect threshold, false when they were
-  scored and none did, and null when the step could not look: no image large enough,
-  or the model not installed. A step can carry several images, a front and a back, a
-  bill and its second page, the frames of a face check. The face step also fills
-  `face_checks.deepfake_checked`, `deepfake_passed` and `deepfake_score`. The score
-  and the per-image scores stay in the step's `result`.
-- Images under 256 pixels on the shorter side are not scored: the detector enlarges
-  everything, and enlargement alone moves the score.
-
-On public test images, real photographs stayed under 0.05 and GAN faces scored 0.99 to
-1.0, through resizing and JPEG compression. It can miss diffusion images, particularly
-once they have been resized or recompressed, and it flags photos run through
-generative "enhance" apps. It is one signal alongside liveness and face match, not a
-guarantee; tune the thresholds on real submissions.
-
-Use the pinned file above. The older export of the same model, which search results
-and the onnx-community mirror point to, was built from the wrong weights with an
-untrained head and scores noise.
-
-## Run locally
-
-```bash
-python3.11 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements-dev.txt
-cp .env.example .env
-uvicorn app.main:app --reload --port 8000
-```
-
-- Health: http://localhost:8000/v1/health
-- API docs: http://localhost:8000/docs
-
-## Deployment
-
-A push to `main` deploys, through `.github/workflows/build.yml` on the
-**self-hosted `prod` runner**: the runner checks the repository out on the server,
-writes `.env` from the repository's secrets, and runs `docker compose up --build
--d`, so the image is built on the machine from that checkout. That checkout is the
-only reason the server talks to GitHub at all.
-
-It uses the workflow's own `GITHUB_TOKEN`, not a personal access token, and nothing
-writes credentials into a git URL. One thing on this runner has to be worked
-around: its `/root/.gitconfig` contains
-
-```
-url."https://<token>@github.com/".insteadOf "https://github.com/"
-```
-
-written by another repository's deploy with `git config --global`, and the runner
-copies that file into every job. It rewrites this checkout's URL into one carrying
-a username and no password, which fails as `could not read Password for
-'https://***@github.com'`. The job points `GIT_CONFIG_GLOBAL` at an empty file in
-its own temp directory, so git ignores that config here without anything being
-changed on the machine. The real fix belongs in the workflow that writes there.
-
-**The container answers on 4500 on the host**, 8000 inside. Point the domain at
-4500. These ports were already taken on that machine and are left alone: 3000,
-3001, 3030, 4000, 4001, 4002, 5000, 5001, 7000, 9000, 10000, and 8000 is skipped
-because something outside Docker may be answering on it.
-
-**The models are on the host, not in the image.** The four ONNX and TFLite files
-are about 200 MB and never change, so the workflow downloads any that are missing
-into `./models` (checking the two large ones against the hashes above) and compose
-mounts that folder read-only. The image would otherwise refetch them on every
-build, and the deploy deliberately prunes only dangling images rather than running
-`docker system prune -af`: this image installs TensorFlow and compiles insightface,
-so throwing away the build cache turns a two-minute deploy into twenty.
-
-**Migrations run before the service serves anything**, in the entrypoint, unless
-`RUN_MIGRATIONS` is set to `false`.
-
-It was the other way round once, opt-in, and that cost an outage. A merge deploys,
-so the new code was answering requests while a column it inserts did not exist yet:
-every `POST /v1/verifications` returned 500 while `/v1/health` stayed green, because
-health touches no table. The schema and the code that needs it have to arrive
-together, and the entrypoint is the only place that can be guaranteed.
-
-Two things back that up. Migrations here are additive, and the one that adds
-`verification_steps.ai_generated` uses `ADD COLUMN IF NOT EXISTS`, because that
-column already exists on both databases from the first attempt. And `check_schema()`
-refuses to start when the database's revision is behind the code's head, so a
-deliberately skipped migration fails loudly at start-up rather than 500ing every
-request. It is skipped in development and on a database with no `alembic_version`
-table, which is how the tests build theirs.
-
-To run them by hand, deploy with `RUN_MIGRATIONS=false` and then:
-
-```bash
-docker compose exec kyc-platform alembic upgrade head
-```
-
-**Secrets the workflow expects**, all in the repository's Actions secrets. Each one
-is named once, as an `echo` line in the deploy step.
-Adding a setting is one line. Two things happen after those lines are written, and
-both exist because of a real failure: lines with no value are dropped, since pydantic
-refuses an empty string where an int or a bool belongs and would stop the service
-rather than fall back to its default, and the file is read back to confirm
-`ENVIRONMENT`, `DATABASE_URL` and `JWT_SECRET` actually landed in it. An empty `.env`
-does not fail on its own: it starts the service on every default, pointed at a
-database on localhost, while the health check still passes.
-
-| | |
-|---|---|
-| `DATABASE_URL` | `postgresql+psycopg://user:pass@host:5432/kyc?connect_timeout=10`. Its own database, and no Prisma parameters: `pool_timeout` and `connection_limit` are Prisma's, not libpq's, and psycopg refuses to connect with them |
-| `REDIS_URL` | |
-| `JWT_SECRET` | long and random. The service refuses to start outside development with the published default |
-| `ENVIRONMENT` | `production` |
-| `ENABLE_DOCS` | `false` in production unless the docs are wanted in public |
-| `VERIFY_BASE_URL` | where the person's journey is served, e.g. `https://kyc.example.com`. Unset means session links are built from the host the request arrived on, which is the API's own host |
-| `CORS_ORIGINS` | which browsers may call the API. Unset means `*`, any page anywhere. A comma separated list of origins narrows it |
-| `GOOGLE_SERVICE_ACCOUNT_EMAIL`, `GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY` | the key's `client_email` and `private_key`, newlines written as `\n` |
-| `GOOGLE_SERVICE_ACCOUNT_JSON` | or the whole key file on one line, instead of those two |
-| `GOOGLE_DRIVE_FOLDER_ID`, `GOOGLE_DRIVE_ROOT_FOLDER` | the Shared Drive folder, and the platform's folder inside it |
-| `SESSION_TTL_MINUTES`, `MAX_SESSION_TTL_MINUTES` | |
-| `EMAIL_ENABLED`, `DASHBOARD_URL` | |
-| `WEB_CONCURRENCY` | workers, default 1. Each one loads SCRFD, ArcFace and the liveness mesh into its own memory |
-| `RUN_MIGRATIONS` | `false` only when a deploy should **not** migrate. Unset means it does |
-
-**`ENVIRONMENT`, `DATABASE_URL` and `JWT_SECRET` are required**: without them the
-deploy stops and names the ones that are missing, because a service with no
-database, or running in development mode with the published signing key, is not
-deployed, only running.
-
-**The rest are optional and a secret left unset is simply not written**, so the
-default in `app/core/config.py` applies. That matters more than it sounds: an unset
-secret arrives as an empty string, and an empty string is not a valid integer or
-boolean, so writing `SESSION_TTL_MINUTES=` would stop the service from starting
-instead of falling back to 60. The first deploy of this service died exactly that
-way.
-
-**Values must be single-line.** Compose reads `.env` a line at a time, so the
-service account's private key goes in with its newlines written as `\n`, and a
-whole JSON key goes in on one line. Both are what Google gives you anyway.
-
-Half-configured Drive settings stop the service at start-up and name what is
-missing, rather than failing at somebody's first document.
-
-## Database
-
-Postgres, through SQLAlchemy; migrations are Alembic's. The tables are in
-`app/db/models.py`: people, verification sessions, document scans, the images
-each scan was made from, and an audit event for every decision. Images are kept
-as a storage key and a SHA-256, never as bytes in a row. Nothing biometric is
-stored yet.
-
-Create the database once, as a Postgres superuser:
+### 4. Create the database
 
 ```bash
 psql -d postgres -c "CREATE ROLE kyc WITH LOGIN PASSWORD 'choose-one';"
 psql -d postgres -c "CREATE DATABASE kyc OWNER kyc;"
 ```
 
-Put the same password into `DATABASE_URL` in `.env`, then create the schema:
+### 5. Configure
+
+```bash
+cp .env.example .env
+```
+
+Put your password into `DATABASE_URL`. That is all a local run needs. Every other
+setting is listed with its default in `app/core/config.py`.
+
+Evidence goes to `var/evidence/` unless Google Drive is set. To use Drive, create a
+service account with the Drive API enabled and add its email to a **Shared Drive** as
+Content manager. Then set `GOOGLE_SERVICE_ACCOUNT_EMAIL`,
+`GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY` (on one line, newlines written as `\n`) and
+`GOOGLE_DRIVE_FOLDER_ID` (a folder in that Shared Drive).
+
+### 6. Create the schema and start
 
 ```bash
 alembic upgrade head
+ENABLE_LEGACY_ENDPOINTS=true uvicorn app.main:app --reload --port 8000
 ```
 
-After changing a model:
+`ENABLE_LEGACY_ENDPOINTS=true` turns on the simulation pages used below. The API
+docs are at http://localhost:8000/docs.
 
-```bash
-alembic revision --autogenerate -m "what changed"
-```
+## Simulating a verification
 
-Read what it generated before running it. Autogenerate is blind to Postgres enum
-types in particular: it creates them as a side effect and never drops them, so a
-new enum is written by hand the way the first migration does it.
+Open http://localhost:8000/ on `localhost`: browsers only allow the camera there
+or over HTTPS.
+
+1. **Document.** Choose the document type (passport, ID card or driving licence).
+   Upload the front, and the back if there is one, or follow *Capture the document
+   with the guide* to use the camera. Enter the first name, last name, date of
+   birth and country exactly as printed, then press **Scan document**.
+2. **Result.** The page shows the decision (`pass`, `fail`, `review` or `retake`),
+   the reasons, and the fields read from the document. The first scan takes a few
+   seconds longer while the models load.
+3. **Face.** Press **Continue to face check**, then **Start**. Look straight at the
+   camera and follow the prompts: tilt up, tilt down, turn left, turn right.
+4. **Verdict.** The page shows whether liveness passed, the movements it saw, the
+   portrait cut from the document, and the face match score against its threshold.
+
+These pages keep everything in memory: nothing is written to the database or to
+evidence storage. To see evidence reach Google Drive and a report produced, open a
+real session (a verification created with an API key) from the API docs.
 
 ## Tests
 
 ```bash
-pytest
+BILLING_ENFORCED=false NETWORK_DATA_DOWNLOAD=false \
+GOOGLE_SERVICE_ACCOUNT_EMAIL= GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY= \
+GOOGLE_SERVICE_ACCOUNT_JSON= GOOGLE_DRIVE_FOLDER_ID= pytest
 ```
 
-## Accounts and API keys
-
-A customer of this service holds an **account**. An account owns **API keys**,
-and a key is what a system presents when it calls the API. Neither is the same
-thing as a `user`, which is a person being verified and who never signs in.
-
-Registration asks for contact and identity details only:
-
-| required | optional |
-|---|---|
-| email, password, first name, last name, phone, country code, date of birth, country | gender, city, address |
-
-| | |
-|---|---|
-| `POST /v1/auth/register` | open an account, signed in straight away |
-| `POST /v1/auth/login` | session token for the dashboard |
-| `GET /v1/auth/me` | who the session belongs to |
-| `POST /v1/auth/forgot-password` | start a reset |
-| `POST /v1/auth/reset-password` | set a new password with the token |
-| `POST /v1/api-keys` | make a key. The key is returned **once** |
-| `GET /v1/api-keys` | list keys, without their secrets |
-| `DELETE /v1/api-keys/{id}` | revoke a key. The row stays |
-
-**How the three secrets are handled**, since they are not the same kind of thing:
-
-- **Passwords** are 8 to 16 characters with no required mixture of character
-  classes. They are hashed with Argon2id, and the stored hash is upgraded quietly
-  at sign-in if the parameters move on.
-- **API keys** are 32 random bytes generated here, so a slow hash would buy
-  nothing and cost a hash on every request. SHA-256, compared in constant time.
-  Stored as a prefix, which is how a presented key is found, plus the hash. A
-  copy of the table is not a set of working credentials.
-- **Session tokens** are signed rather than stored: a JWT, checked against
-  `JWT_SECRET`. The service refuses to start outside development if that is
-  still the published default or shorter than 32 characters.
-
-**Two deliberate refusals to be helpful.** A failed sign-in says only that the
-email or password was wrong, never which, and the password is verified even when
-no such account exists so that both take the same time. A password reset gives
-the same answer whether or not the address is known: confirming which addresses
-have accounts hands over a list worth stealing.
-
-**Keys expire.** The default is 90 days and the ceiling is a year. A key with no
-end date is a key nobody ever rotates, and the one that leaks is always the
-oldest. Revoked and expired keys are kept, so what they did does not disappear
-with them, and every call stamps `last_used_at` so a key nobody uses can be
-found and removed.
-
-### Not done yet
-
-- **Email.** `app/services/email.py` records what it would have sent and sends
-  nothing. Everything around it is real: the token is generated, hashed, stored
-  with an expiry and spent once. While email is off and `ENVIRONMENT` is
-  `development`, `forgot-password` hands the token back in the response so the
-  flow can be tested; anywhere else that is refused.
-- **Verifications are not yet tied to an account.** `account_from_api_key` is
-  built and tested, but the verification endpoints are still open, so the test
-  pages keep working. Attaching the guard and recording which account a
-  verification belongs to is the next piece.
-
-## A verification, start to finish
-
-A verification is a session a person walks through, not a single check. The
-client opens one, sends the person a link, and polls for the answer.
-
-```
-client                     us                              person
-  |  POST /v1/verifications  |                                |
-  |------------------------->|  row created, steps pending    |
-  |  reference, session_url  |                                |
-  |<-------------------------|                                |
-  |                          |        the link, by email or QR |
-  |                          |------------------------------->|
-  |                          |  GET /v1/sessions/{token}      |
-  |                          |<-------------------------------|
-  |                          |  POST .../document             |
-  |                          |<-------------------------------|
-  |                          |  POST .../face                 |
-  |                          |<-------------------------------|
-  |  GET /v1/verifications/{reference}                        |
-  |------------------------->|                                |
-  |  passed / failed / needs_review                           |
-  |<-------------------------|                                |
-```
-
-**Two audiences, two kinds of access.** The client holds an API key and
-everything they touch is scoped to their account. The person holds only the
-session link, and what they can read through it is deliberately thin: where they
-are and what is next, with no reasons, no extracted fields and nothing about the
-client. That is what makes the link safe to put in a QR code: the same session
-can be opened on a phone for a better camera and finished back on the laptop,
-because both are looking at one row.
-
-**Steps happen in the order the client asked for.** A face step before any
-document has been scanned is refused with a 409 rather than quietly accepted,
-because a face matched against a document nobody has read is not a verification
-of anything.
-
-**A retry is a new attempt, not an overwrite.** Somebody who failed twice on
-glare and passed on the third try reads that way afterwards.
-
-**What the document is checked against comes from initiation**, never from the
-request carrying the images. The person cannot type a different name into their
-own check.
-
-**A document with no face on it does not pass.** An identity document carries a
-portrait, so if none can be found the step stops with `NO_PORTRAIT_ON_DOCUMENT`
-rather than letting the person walk on to a face check with nothing to compare
-against. A birth certificate is the exception, since it carries no photograph.
-Whether there is a portrait is decided by the same detector the match uses, not
-by the one that cuts the picture for display: two detectors disagreeing is how a
-card with a perfectly good face on it was once recorded as having none.
-
-### What a client sends
-
-```json
-{
-  "reference": "ORDER-9912",
-  "services": ["document", "face"],
-  "applicant": {
-    "first_name": "Jean Marie",
-    "last_name": "Jabo",
-    "date_of_birth": "2002-02-24",
-    "country": "Rwanda",
-    "email": "jean@example.com",
-    "phone": "+250788123456"
-  },
-  "country": "RWA",
-  "language": "EN",
-  "ttl_days": 7
-}
-```
-
-`reference` is the only identifier a client sends, the way Shufti takes
-nothing but a reference. Nothing names the person: `customer_id` comes back in
-the response, generated here, and is theirs to store if they want to recognise a
-returning applicant later.
-
-The names and date of birth are what the document is checked against, so they
-have to match the document as printed. `country` is the country the document is
-expected from. `callback_url` and `redirect_url` are accepted and recorded;
-nothing is sent to them yet.
-
-`applicant.address` is **required when `services` includes `address`**, and the
-request is refused with 422 without it. There is nothing to check a bill against
-otherwise, and finding that out at the step means the person is standing there
-holding one.
-
-`form_id` attaches a **due diligence form**, the way Shufti's questionnaire uuid
-does. Sending one is enough: `due_diligence` is added to `services` for you, ahead
-of `aml`. The form has to be active and given to your account, otherwise the
-request is refused with 422. `GET /v1/due-diligence/forms` lists the ones you can
-use.
-
-`document_types` narrows the identity documents the person can choose from, the
-way Shufti's `document.supported_types` does: any of `passport`, `id_card`,
-`driving_license`. Left out, all three are offered. The session page shows only
-these, and a document of any other type is refused with 422 at the step.
-
-`document_groups` puts sections in front of the documents: the person ticks the
-one that describes them and is then offered only that section's documents. Send
-`"residency"` for the built-in three:
-
-| key | label | accepts |
-|---|---|---|
-| `citizen_passport` | I am a citizen of my registered country | `passport` |
-| `citizen_no_passport` | I don't have a passport but I am a citizen of my registered country | `driving_license`, `id_card` (shown as "National ID") |
-| `foreign_resident` | I am a foreigner living or working in my registered country | `id_card` (shown as "Resident ID") |
-
-Or send your own, up to six: `[{"key": "investor_us", "label": "I am a US
-investor", "note": "Passport required", "document_types": ["passport"],
-"labels": {}}]`. A key is lowercase letters, digits and underscores and is
-unique; `note` is shown under the label; `labels` renames a document within
-that section. Left out, the step is the plain list of `document_types` as
-before. With groups, `document_types` defaults to every type they offer, and if
-you send both, the groups may not offer a type it leaves out (422).
-
-The session page sends the chosen key as `document_group` with the document. The
-step refuses a document without one, or one that section does not accept, with
-422. The key is kept on the step as `extracted.document_group`. A resident ID is
-read as an `id_card`: the section records what the person said, it is not a
-separate document check.
-
-The section ticked is reported as `document_group`, `{"key": ..., "label": ...}`
-or `null`, on `GET /v1/verifications/{reference}`, in the callback body, and on
-each row of the due diligence responses. That is where "I do not hold a
-passport" is recorded now: the `net_worth_assessment_no_passport` form, which
-asked for a typed "confirm", is archived (migration a8c1e5f37d20) and refused
-with 422 like any inactive form. Send `net_worth_assessment` with
-`document_groups` instead.
-
-`address_types` does the same for the proof of address, like Shufti's
-`address.supported_types`: any of `utility_bill`, `bank_statement`,
-`credit_card_statement`, `rent_agreement`, `driving_license`. Left out, every
-proof except a driving licence is offered, since only a few countries print an
-address on one. A licence is held to its expiry date instead of the 90 days a
-bill or statement is: an expired one fails with `PROOF_EXPIRED`.
-
-### Endpoints
-
-| | |
-|---|---|
-| `POST /v1/verifications` | open one, get the link. API key |
-| `GET /v1/verifications/{reference}` | how that customer got on. API key |
-| `GET /v1/sessions/{token}` | where the person is. Link only |
-| `POST /v1/sessions/{token}/document` | submit the document. Link only |
-| `POST /v1/sessions/{token}/face` | liveness and the face match. Link only |
-| `POST /v1/sessions/{token}/address` | upload a proof of address. Link only |
-| `GET /v1/due-diligence/forms` | the forms this account may attach. API key |
-| `GET /v1/sessions/{token}/due-diligence` | the questions to ask. Link only |
-| `POST /v1/sessions/{token}/due-diligence` | the answers: `answers` as JSON, plus one file part per file question, named by its key. Link only |
-
-`session_url` in the response points at the first of these:
-
-| | |
-|---|---|
-| `/verify/{token}` | where they are and what is next, with the QR to carry on by phone |
-| `/verify/{token}/document` | choose which document, then photograph it. The person's details are not asked for again: they came from the client at initiation, and nothing typed here is sent |
-| `/verify/{token}/face` | the liveness challenge and the portrait |
-| `/verify/{token}/address` | upload a bill or statement. An upload, not a capture: a bill is a file somebody already has |
-| `/verify/{token}/qr.svg` | the session link as a QR, drawn here rather than by a QR service: the token in it is the credential, and it is not going in somebody else's query string |
-
-`reference` is the client's own string, unique within their account, and it is
-what they look a customer up by. One is generated if they send none.
-
-### How long a link lives
-
-`ttl` is in minutes and defaults to 60, as Shufti defines it. `ttl_days` says the
-same thing for people who would rather write 7. Send one or the other, never
-both, or the request is refused. The ceiling is 30 days
-(`MAX_SESSION_TTL_MINUTES`), because a link that lives for weeks is a link that
-can be forwarded.
-
-When it runs out the verification moves to `expired` with the event
-`request.timeout`: as soon as anybody looks at it, so a polling client sees it
-without waiting, and in a sweep for the ones abandoned in silence.
-
-### The old test pages
-
-`/` and `/capture` still drive the original in-memory flow, which writes to no
-table, and their face step now lives at `/scratch-verify/{id}` because
-`/verify/{token}` belongs to a session. They are kept for trying the document and
-face engines on their own.
-
-### Status and events
-
-Status is a lifecycle state: `pending`, `in_progress`, `passed`, `failed`,
-`needs_review`, `expired`. Each one also sets an `event` from Shufti's
-vocabulary (`request.received`, `request.pending`, `verification.accepted`,
-`verification.declined`, `request.timeout`), so a client already integrated with
-them can match on the strings they already match on.
-
-A step's status is a verdict rather than a state, and uses the same words the
-document checks use: `pass`, `fail`, `review`, `pending`, `skipped`.
-
-### A child, verified by a parent
-
-A child never verifies themselves. An adult verifies in the ordinary way, and
-their birth certificate is then a second document proving a **link** rather than
-an identity:
-
-```
-POST /v1/verifications/{parent reference}/children     X-API-Key
-  certificate, first_name, last_name, date_of_birth
-```
-
-Four things are checked on it:
-
-| check | outcome if it fails |
-|---|---|
-| it reads as a birth certificate | fail |
-| the parent's **verified** names appear on it, either side | fail |
-| the child's names appear on it, and the date of birth matches | fail |
-| the country matches the country on the parent's document | **review** |
-
-The parent's names come off their own verified record, never from the request,
-so a caller can say which parent to use but not who the parent is. The age rule
-does not apply, because a child is under 18 by definition.
-
-The country check is the one that goes to a person rather than failing: a family
-living abroad has a genuine certificate from another country, and refusing that
-outright costs a real customer.
-
-The parent's verification must have **passed**. The child becomes a verification
-of its own, with its own applicant, evidence and verdict, pointing at the
-parent's through `parent_verification_id`.
-
-## The schema
-
-Integers inside, opaque strings outside. Primary keys are `BIGINT` because whole
-ids get read out, compared by eye and typed into tickets. They are enumerable,
-so nothing a client or a browser sees is one of them: a verification travels as
-its `reference`, a person as their `customer_id`, a session as its
-`session_token`.
-
-| table | holds |
-|---|---|
-| `accounts` | a customer of this service. They sign in and hold API keys |
-| `applicants` | a person being verified. They never sign in. `customer_id` is the public id we generate for them, 22 characters, the shape Shufti shows as Customer ID |
-| `verifications` | one session: what was asked for, where it stands, how it ended, the settings echoed back for the report, the reasons and warnings |
-| `verification_steps` | one attempt at one step, with its own reasons, result and the device that did it |
-| `document_scans` | one document read: the verdict and every field it gave up |
-| `verification_files` | every image and clip: document sides, the portrait cut from the document, the selfie, the liveness clip, the report |
-| `face_checks` | liveness, planarity, the match and its threshold, the duplicate face warning and the deepfake columns |
-| `face_templates` | the numbers a face reduces to, so a later verification can ask whether it has seen this face before |
-| `device_sessions` | address, city, coordinates, ASN, fingerprint, timezone, operating system and the risk signals |
-| `callback_deliveries` | every attempt to tell the client, with its HTTP code |
-| `audit_events` | who did what |
-
-**Claimed and verified are different fields.** What the client typed at
-initiation lives on the verification; what a document proved lives on the
-applicant. Anything that later relies on identity, such as checking a child's
-certificate against a parent, reads the verified side.
-
-**Applicants belong to one account.** The same human verified by two clients is
-two applicants, because sharing identity between customers is a legal question
-rather than a technical one.
-
-**Every verification opens its own applicant.** A client sends one reference per
-verification and nothing that names the person, so two attempts by the same human
-are two applicants. What links them is the face: a portrait matching somebody
-else's record raises a warning naming that verification, never a failure and
-never an automatic merge. Face matching has an error rate and siblings exist, so
-a person decides.
-
-### Evidence
-
-Evidence is kept in **Google Drive**, under one folder for the whole platform
-(`GOOGLE_DRIVE_ROOT_FOLDER`, "KYC Verifications" by default) inside the folder id
-configured, with one subfolder per verification **named by our own verification
-id**. Never the client's reference: that is a string the client chooses and it is
-only unique within their account, so two clients using the same string would
-otherwise write into one folder. The storage key is the Drive file id. Each row
-also records the size and a SHA-256, so a file can be proved to be the one that
-was judged.
-
-Drive is reached with a **service account key**, calling the Drive API directly.
-
-| setting | where it comes from |
-|---|---|
-| `GOOGLE_SERVICE_ACCOUNT_EMAIL` | `client_email` in the service account's JSON key |
-| `GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY` | `private_key` from the same file, newlines written as `\n` |
-| `GOOGLE_SERVICE_ACCOUNT_JSON` | or the whole key file's contents, instead of those two |
-| `GOOGLE_DRIVE_FOLDER_ID` | the folder's id, out of its Drive URL |
-| `GOOGLE_DRIVE_ROOT_FOLDER` | the platform's own folder inside it, made on first use |
-
-The folder has to be on a **Shared Drive**, with the service account added as a
-member with Content manager rights, exactly as a person would be added. A service
-account owns no Drive storage of its own, so an upload into an ordinary My Drive
-folder comes back as "Service Accounts do not have storage quota". Every call is
-made with `supportsAllDrives`, which is what makes a Shared Drive visible to the
-API at all.
-
-There is no switch. Set the key and the folder and evidence goes to Drive; set
-neither and it goes to a folder on this machine, which is how the tests and a
-developer's laptop run. Set half of it and the service stops at start-up and
-names what is missing, rather than failing at somebody's first document.
-
-**Nothing is ever shared from Drive.** No file is made public, no link is handed
-out, no permission is granted. These are photographs of identity documents and
-faces: they are read back through our API by a caller holding a key, and embedded
-in reports rather than linked.
-
-## Not built yet
-
-Deliberately parked, in the order they matter:
-
-- **Tamper detection on an address proof**, which is the one check in the address
-  step reported as not run. See below.
-- **Callbacks.** The table is there and nothing writes to it: we do not yet tell
-  a client anything, they have to poll.
-- **Device and network intelligence.** The table holds the shape of Shufti's
-  report block. We record the address, user agent and language that arrive for
-  free; ASN, proxy, Tor, data centre and the fraud score need a lookup service.
-- **Deepfake detection.** Columns exist on `face_checks` so turning it on is a
-  write rather than a migration.
-- **The verification report PDF**, assembled from the verification, its steps
-  and its files.
-- **Email.** Password resets are created, hashed, stored and spent, and nothing
-  is sent.
-- **Calibration.** The face threshold is drawn between two small measured
-  groups, not set from measured error rates over a real population.
-
-## Due diligence forms
-
-Written by staff in the admin console (`/v1/console/due-diligence/forms`):
-owners and admins create and edit them, every other console role reads them.
-A form has a name, a status (`draft`, `active`, `archived`), the clients allowed
-to use it, and its questions. Each question has a `key`, a label, a type, and
-whether it is required:
-
-`text`, `textarea`, `number`, `amount`, `date`, `select`, `multi_select`,
-`country`, `yes_no`, `file`
-
-`select` and `multi_select` carry their `options`. A `text` question can carry
-`expected`, the exact word the person has to type (compared ignoring case), as in
-Shufti's "type confirm" passport confirmation. A file is an image or a PDF up
-to 15 MB, kept with the verification's other evidence.
-
-The `key` is what ties an answer to its question, so it stays the same when the
-wording changes. The step keeps a copy of the questions it was answered against,
-so editing a form never changes what an old answer meant. A form is never
-deleted, only archived: archiving stops new verifications from using it, not the
-ones already sent.
-
-A Net worth assessment form is created by the
-migration as `net_worth_assessment`, active, with no clients.
-
-## Document check
-
-`POST /v1/document/scan` (multipart form)
-
-| Field | Required | Notes |
-|---|---|---|
-| `document_type` | yes | `passport`, `id_card` or `driving_license` |
-| `front` | yes | JPEG, PNG or WebP, max 10 MB |
-| `back` | no | Back side of ID cards and licences |
-| `first_name`, `last_name` | no* | Compared with the name on the document |
-| `date_of_birth` | no | `YYYY-MM-DD`, compared with the document |
-| `issuing_country` | no | `RW`, `RWA` or `Rwanda`. 2-letter codes work as they are. |
-
-*Required for a `pass` on documents without an MRZ.
-
-Pipeline:
-
-1. Image quality (blur, brightness, glare, resolution)
-2. OCR of all text on every side (RapidOCR, PaddleOCR models on ONNX Runtime, CPU)
-3. Document detection: rejects images that are not identity documents
-4. MRZ, when the document has one (check digits validated, Tesseract as second reader)
-5. Printed fields for any document: names, dates, ID number, sex, country and document
-   type, from labels in English, French, Kinyarwanda and Swahili (`app/engines/fields.py`)
-6. Checks: document type, expiry, age, country, MRZ vs printed dates, name and date of birth
-
-Decisions: `pass`, `fail`, `review` (a person decides) or `retake` (bad photo or not a
-document). `reasons` explain the decision; `warnings` are worth knowing but did not change
-it. Thresholds live in `app/rules/document.py`.
-
-## Address check
-
-`POST /v1/sessions/{token}/address` (multipart form)
-
-| Field | Required | Notes |
-|---|---|---|
-| `document_type` | yes | `utility_bill`, `bank_statement`, `credit_card_statement` or `rent_agreement`, as Shufti's `supported_types` |
-| `proof` | yes | **PDF**, JPEG, PNG or WebP, max 10 MB |
-| `back` | no | A second file, when the proof is in two |
-
-**Uploaded, not captured.** A bill is a file somebody already has, or a
-photograph they took before they got here, so the page is a file picker rather
-than a camera.
-
-**A PDF is read two ways.** A statement generated by a bank carries its text
-inside it, and that text is read directly, which is quicker and more accurate than
-any OCR could be. A scan or a photograph wrapped in a PDF carries no text, so its
-pages are rendered at `PDF_RENDER_SCALE` (about 200 dpi) and read like any other
-picture. Up to `PDF_MAX_PAGES` (3) are read, because the address is on the first
-page and nobody needs a year of somebody's transactions. Image quality is only
-judged on photographs: blur and glare mean nothing on a page a computer drew.
-
-The file that is kept is the one that was uploaded, PDF included, not a picture
-made from it.
-
-The address is the one the client sent at initiation, never anything typed on the
-page, and the name looked for is the one the **document step proved**. So the
-person chooses which document to upload, and nothing else about their own check.
-
-The checks carry Shufti's own names, so a client holding one of their reports can
-map ours onto it line for line:
-
-| ours | Shufti's report |
-|---|---|
-| `address_document_proof` | Address Document Proof |
-| `address_on_document_match` | Address on Document Match |
-| `match_address_proofs_with_document_proofs` | Match Address Proofs With Document Proofs |
-| `address_document_expiration` | Document Expiration |
-| `address_document_authenticity` | Address Document Authenticity |
-
-### Comparing the address
-
-**The address has to be written on the document exactly as it was given to us.**
-Case, spacing and punctuation are ignored, because those are how text was printed
-rather than what it says, and the document's lines are joined before searching so
-an address printed across two lines still reads as one. Nothing else is forgiven:
-an abbreviation is not the word it stands for, and a street code is not the city
-it sits in.
-
-| claimed at initiation | on the document | result |
-|---|---|---|
-| KG 586 St, Kigali City | KG 586 ST, KIGALI CITY | pass |
-| KG 586 St, Kigali City | `KG 586 St` / `Kigali City` on two lines | pass |
-| Kigali, Rwanda | KG 333 St | **fail**, `ADDRESS_MISMATCH` |
-| Kigali, Rwanda | Kigali City | **fail**, `ADDRESS_MISMATCH` |
-| KG 586 Street, Kigali | KG 586 St, Kigali | **fail**, `ADDRESS_MISMATCH` |
-| KG 586 St, Kigali City | KG 12 St, Kigali City | **fail**, `ADDRESS_MISMATCH` |
-
-Pass or fail, never review, and no partial credit. A check that asks a person to
-decide whenever two addresses are written differently is a check nobody runs.
-
-What this asks of a client: send the address the way it appears on the documents
-their customers actually hold. An address stored as "Kigali" will not pass against
-anything, and that is the client's data to fix rather than something for the
-matcher to guess at.
-
-A **PO box fails** (`PO_BOX_NOT_ACCEPTED`), before anything is read, as Shufti's
-`po_box: false` does, and a mailbox is not somewhere anybody lives.
-
-**90 days**, as Shufti's `document_validity`: the newest date on the
-page that is not in the future has to be within that, or the proof is too old. No
-readable date at all goes to a person rather than failing, because plenty of
-genuine bills print one in a format nothing reads.
-
-**Authenticity is reported as `skipped`, never as passed.** Shufti runs a tamper
-check there. We have no model for it, and a blank check that reads as a pass in a
-report somebody relies on is worse than one that says plainly it was not run.
-
-## Face verification
-
-Two steps, so the document is uploaded once. A successful scan returns a
-`verification_id` and a `face_verification_url`; the session holds the document's
-portrait in memory for `SESSION_TTL_MINUTES` (no database yet).
-
-`POST /v1/verifications/{id}/face` (multipart form)
-
-| Field | Required | Notes |
-|---|---|---|
-| `frames` | yes | 6 to 60 images captured while the head moves, in order |
-| `challenge` | no | `circle` (left, right, up, down) or `horizontal` (left, right) |
-
-It runs two checks and returns one decision:
-
-**Liveness.** Every frame must hold exactly one face, the face must move smoothly
-(jumps mean separate photos, not one capture), and the head must actually turn.
-
-Head pose is in degrees, as ISO/IEC 29794-5 and its reference implementation OFIQ
-express it: a generic 3D head is fitted to the detector's landmarks with OpenCV's
-`solvePnP` (`app/engines/pose.py`) and the rotation is read back. Direction is
-measured against the person's own resting angles, because camera position biases
-the absolute values; on a real capture the resting yaw was -9 degrees and the
-turns reached 47 and -58.
-
-**Only left and right are used.** Pitch from five landmarks is too noisy to gate
-on: on a capture where the person only turned, it wandered between -33 and +10
-degrees. Nodding would need a denser landmark model such as MediaPipe's 478-point
-mesh, which runs in the browser but crashes in its Python build on macOS.
-
-**Three seconds of video, not the whole check.** The page records the first
-`CLIP_SECONDS` (3) of the capture and stops itself, so a disputed result can be
-looked at by a person and a new model can be run over a real capture. Recording
-the whole challenge would mean holding a film of somebody's face in their own home
-for no reason anybody could point at. The server can only enforce the size of what
-arrives, since nothing here decodes video, so the length is decided by the page and
-`MAX_VIDEO_BYTES` keeps the file from being absurd.
-
-The sharpest frontal frame comes back as a cropped JPEG. This stops a printed
-photo, but not a recorded video or a fake camera feed; passive anti-spoofing is
-still to come.
-
-**Face match.** SCRFD detects the face and ArcFace (`w600k_r50`, InsightFace's
-buffalo_l pack) turns it into 512 unit-length numbers, for the document portrait
-and for the captured frames alike, compared by cosine similarity. Both images go
-through the same detector and the same alignment (`face_align.norm_crop` onto
-ArcFace's 112x112 template), because any difference in framing that survives into
-the model shows up as a difference between people. Only frames where the person
-faced the camera are compared: the frames from the head movements prove liveness,
-not identity, and a turned face scores lower against a passport-style portrait
-whoever it belongs to. The score is the mean of the best few frontal frames, so a
-handful of poor ones cannot sink a genuine capture while one lucky frame cannot
-carry a poor one. Detection for liveness stays with YuNet.
-
-`POST /v1/face/liveness` runs the liveness half on its own, without a document.
-
-`POST /v1/face/frame` checks a single frame while the capture is still running: it
-returns whether the face is usable, which way the head points (against the resting
-pose the caller sends back), and hints to show the person: `NO_FACE`,
-`MULTIPLE_FACES`, `MOVE_CLOSER`, `MOVE_BACK`, `TOO_DARK`, `TOO_BRIGHT`,
-`HOLD_STILL`. Quality is measured on the face itself, not the whole frame. This is
-guidance only: the decision endpoint recomputes everything from the frames it is
-given, so a page that lies about what it saw changes nothing.
-
-### Reading the score
-
-`match.score` is a cosine similarity between two unit-length ArcFace vectors, not
-a percentage: it is the cosine of the angle between them, from -1 to 1. It is
-reported next to the line it was judged against, and nothing rescales it.
-
-No confidence percentage is returned. A similarity is not a probability, and the
-calibration set that would let us convert one into the other honestly does not
-exist yet. A number that looks like a probability and is not would be read as one.
-
-### Where the pass threshold comes from
-
-It is **measured**, and it lives in `app/rules/face.py` as `MATCH_THRESHOLD`,
-currently **0.40**. InsightFace publishes no threshold for this pack, because the
-right line depends on how the images were taken, and ours are a photograph printed
-on an identity card against a webcam frame.
-
-What it was set from, one person's Rwandan national ID and driving licence against
-20 frames of their own capture and against six strangers:
-
-| comparison | score |
-|---|---|
-| same person, frontal frames against own ID | 0.524 to 0.583 |
-| same person, frames from the head movements | 0.461 to 0.559 |
-| different people | 0.02 to 0.09 |
-
-The two groups are half a point apart, so the line sits between them rather than
-inside either. For reference, DeepFace publishes 0.32 for its own ArcFace, and the
-service this engine was modelled on uses 0.65 against its own images, which would
-have refused every genuine pair measured here.
-
-This is not yet a calibration set. The strangers were easy negatives. Hard
-negatives, people of similar age and appearance photographed the same way, are
-what the line should finally be set against.
-
-What is ours, and marked as such in `app/rules/face.py`:
-
-- `MATCH_THRESHOLD`, the pass line, with the measurements above behind it
-- `MATCH_TOP_FRAMES`, scoring on the best few frames instead of all of them
-- `FRONTAL_PITCH_DEGREES`, with `FRONTAL_DEGREES`, which frames count as facing
-  the camera and so are allowed to decide identity
-- the live capture quality limits
-
-**The document portrait sets the ceiling.** Everything is matched against it, so
-it is checked for size first: at least 130 px of face height and 45 px between the
-eyes, in the spirit of ICAO 9303 and ISO/IEC 19794-5, which ask for about 90 px
-between the eyes on a reference photo. Measured here: a real ID photograph gives a
-196 px face with eyes 69 px apart and matches reliably; a screenshot of an ID gave
-an 87 px face with eyes 31 px apart, and against it a different person scored
-*higher* than the true owner. Those documents are refused with
-`DOCUMENT_PHOTO_TOO_SMALL` instead of being matched.
-
-**A measured false accept, and what it changed.** An earlier version used SFace,
-where one person's face against a different person's Rwandan ID scored 0.4275
-against a published line of 0.407: a stranger accepted. The replacement, Facenet512,
-fixed that but sat too close the other way, with genuine pairs from 0.60 to 0.77
-against a 0.700 line, so the same true person passed or failed depending on the
-light. ArcFace separates the two groups much further apart on this material:
-genuine 0.46 to 0.58, strangers 0.02 to 0.09.
-
-**Still to do: calibration.** NIST SP 800-63-4 asks identity proofing at IAL2 to run
-at a false match rate of 1 in 10,000 or better with a false non-match rate under 5%.
-Hitting a stated error rate needs pairs of genuine and different people from our own
-population, photographed the way ours are: printed card photographs against webcam
-frames. Until that is measured, `MATCH_THRESHOLD` is a line drawn between two small
-measured groups, not a verified operating point.
-
-## Test pages
-
-Not part of the API; they exist to drive the flow by hand before the real frontend
-is built.
-
-- `GET /` upload a document, see the verdict, continue to the face check
-- `GET /verify/{id}` camera with a circular guide. It polls `/v1/face/frame` while
-  capturing, so the progress ring only advances once the camera actually sees the
-  movement, and bad light or blur is called out while it can still be fixed. When
-  the circle is complete the picture freezes, then the result replaces the camera:
-  verdict, the captured photo beside the document portrait, scores, and the head
-  pose of every frame
-
-The camera needs `localhost` or HTTPS; browsers block it on plain HTTP hosts.
+The tests use the database in `DATABASE_URL`, each in a throwaway schema, so no
+data is touched. The overrides keep a `.env` that enforces billing or points at a
+real Drive from affecting the run. Tests that need Postgres are skipped, not failed,
+when it cannot be reached.
