@@ -2,7 +2,6 @@
 __pycache__/
 *.pyc
 .pytest_cache/
-.env
 # The folder itself, not only its contents. A symlink called models, made to point
 # a worktree at the real one, was committed by accident, and the deploy then checked
 # out a dangling link that `mkdir -p models` could not create over.
@@ -12,3 +11,5 @@ models/*.task
 var/
 
 venv/
+config.bat
+node_modules
