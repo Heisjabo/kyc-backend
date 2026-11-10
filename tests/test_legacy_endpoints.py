@@ -37,8 +37,8 @@ def test_reachable_when_switched_on(monkeypatch, method, path):
     assert response.status_code in (200, 404, 422)
 
 
-def test_default_is_off():
-    assert type(settings).model_fields["ENABLE_LEGACY_ENDPOINTS"].default is False
+def test_default_is_on():
+    assert type(settings).model_fields["ENABLE_LEGACY_ENDPOINTS"].default is True
 
 
 def test_the_real_flow_does_not_need_them(monkeypatch):
