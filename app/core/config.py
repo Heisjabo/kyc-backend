@@ -27,8 +27,10 @@ class Settings(BaseSettings):
     # /v1/document/birth-certificate, /v1/face/liveness, /v1/face/frame,
     # /v1/verifications/{id}/face, and the pages that drive them. They have no
     # authentication: anyone who can reach them can upload an identity document and get
-    # the personal details read from it. Off unless a developer turns it on.
-    ENABLE_LEGACY_ENDPOINTS: bool = False
+    # the personal details read from it. On by default so the simulation pages work
+    # out of the box; set ENABLE_LEGACY_ENDPOINTS=false in any deployment that should
+    # not expose them.
+    ENABLE_LEGACY_ENDPOINTS: bool = True
 
     # A callback URL must resolve to public addresses only. Turn this on to allow
     # localhost and private networks, which a developer's machine and the tests need.

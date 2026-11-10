@@ -1,7 +1,7 @@
 """Headers that tell a browser how to treat what this service sends.
 
 The API answers JSON, so almost nothing it sends should ever be run or framed. The few
-HTML pages (switched on only with ENABLE_LEGACY_ENDPOINTS) keep their own scripts and are
+HTML pages (served while ENABLE_LEGACY_ENDPOINTS is on) keep their own scripts and are
 given only the headers that do not stop them working.
 """
 
