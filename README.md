@@ -92,10 +92,11 @@ Content manager. Then set `GOOGLE_SERVICE_ACCOUNT_EMAIL`,
 
 ```bash
 alembic upgrade head
-ENABLE_LEGACY_ENDPOINTS=true uvicorn app.main:app --reload --port 8000
+uvicorn app.main:app --reload --port 8000
 ```
 
-`ENABLE_LEGACY_ENDPOINTS=true` turns on the simulation pages used below. The API
+The simulation pages used below are on by default (`ENABLE_LEGACY_ENDPOINTS`).
+Set `ENABLE_LEGACY_ENDPOINTS=false` to hide them, for example in production. The API
 docs are at http://localhost:8000/docs.
 
 ## Simulating a verification
